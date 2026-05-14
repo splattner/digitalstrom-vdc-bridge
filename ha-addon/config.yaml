@@ -1,0 +1,51 @@
+name: "digitalSTROM vDC Bridge"
+description: "Virtual Device Connector (vDC) for digitalSTROM. Bridges MQTT, Tasmota, Zigbee2MQTT, WLED, and Home Assistant devices into the digitalSTROM ecosystem."
+version: "1.0.0"
+slug: "digitalstrom_vdc_bridge"
+url: "https://github.com/splattner/digitalstrom-vdc-bridge"
+
+arch:
+  - aarch64
+  - amd64
+  - armhf
+  - armv7
+
+init: false
+
+map:
+  - data:rw
+
+# Pre-built images from GHCR — arch placeholder is substituted by the supervisor
+image: "ghcr.io/splattner/digitalstrom-vdc-bridge/ha-addon-{arch}"
+
+ports:
+  8999/tcp: 8999
+
+ports_description:
+  8999/tcp: "vDC API — point your digitalSTROM controller at <ha-host>:8999"
+
+ingress: true
+ingress_port: 8090
+ingress_stream: false
+
+# Required to access ws://supervisor/core/websocket with SUPERVISOR_TOKEN
+homeassistant_api: true
+
+panel_icon: mdi:home-automation
+panel_title: "vDC Bridge"
+
+options:
+  description: "digitalSTROM vDC Bridge"
+  listen_port: 8999
+  vdcapi_port: 8340
+  non_local: true
+  no_discovery: false
+  no_auto: false
+
+schema:
+  description: str
+  listen_port: port
+  vdcapi_port: port
+  non_local: bool
+  no_discovery: bool
+  no_auto: bool

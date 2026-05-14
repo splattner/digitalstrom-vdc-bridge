@@ -1,0 +1,25 @@
+# ── Runtime data (created by the daemon, contain user config / state) ─────────
+bridges.json
+config.json
+plugins.json
+status.json
+dsuid
+
+# ── Generated web assets (run 'make web' or 'npm run build' in web/) ──────────
+# Ignore all generated content; keep the directory via .gitkeep so go:embed compiles.
+pkg/httpapi/webdist/*
+!pkg/httpapi/webdist/.gitkeep
+
+# ── Go build output ────────────────────────────────────────────────────────────
+/vdcgo-daemon
+/dist/
+
+# ── Web ────────────────────────────────────────────────────────────────────────
+web/node_modules/
+
+# ── Docs (PDF files are not redistributable) ───────────────────────────────────
+docs/*.pdf
+
+# ── OS ────────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db

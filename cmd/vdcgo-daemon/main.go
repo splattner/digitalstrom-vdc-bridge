@@ -1,0 +1,67 @@
+package main
+
+import (
+	"context"
+	"flag"
+	"log"
+	"os"
+	"os/signal"
+	"syscall"
+
+	"github.com/splattner/vdcgo/pkg/logging"
+	"github.com/splattner/vdcgo/pkg/vdcgo"
+)
+
+func main() {
+	listen := flag.String("listen", "8999", "TCP port or absolute Unix socket path")
+	nonLocal := flag.Bool("non-local", false, "allow non-local TCP clients")
+	vdcAPI := flag.Int("vdcapi-port", 0, "vDC API listen port (default: 8340)")
+	noVdcAPI := flag.Bool("novdcapi", false, "disable vDC API stub listener")
+	noDiscovery := flag.Bool("nodiscovery", false, "disable DNS-SD discovery advertisement")
+	noAuto := flag.Bool("noauto", false, "publish vdc as noauto")
+	dsuid := flag.String("dsuid", "", "34-hex-digit dSUID advertised via DNS-SD")
+	description := flag.String("description", "vdcgo external", "DNS-SD instance description")
+	dataDir := flag.String("datadir", "", "directory for persistent data (scenes, device config); empty disables persistence")
+	httpListen := flag.String("http-listen", envOrDefault("VDCGO_HTTP_LISTEN", ""), "address for the REST/WebSocket HTTP API, e.g. :8090 (empty = disabled)")
+	flag.Parse()
+
+	svc, err := vdcgo.NewService(vdcgo.Config{
+		Listen:       *listen,
+		NonLocal:     *nonLocal,
+		VdcAPIPort:   *vdcAPI,
+		EnableVdcAPI: !*noVdcAPI,
+		EnableDNSSD:  !*noDiscovery,
+		DSUID:        *dsuid,
+		Description:  *description,
+		NoAuto:       *noAuto,
+		DataDir:      *dataDir,
+		HTTPListen:   *httpListen,
+	})
+	if err != nil {
+		logging.Error("daemon_config_error", logging.Fields{"error": err})
+		log.Fatalf("config error: %v", err)
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	logging.Info("daemon_start", logging.Fields{
+		"listen":        *listen,
+		"vdcapi_port":   svc.Config().VdcAPIPort,
+		"dns_discovery": !*noDiscovery,
+		"dsuid":         svc.Config().DSUID,
+		"http_listen":   *httpListen,
+	})
+	if err := svc.Run(ctx); err != nil {
+		logging.Error("daemon_stopped_with_error", logging.Fields{"error": err})
+		log.Fatalf("daemon stopped with error: %v", err)
+	}
+	logging.Info("daemon_stopped", nil)
+}
+
+func envOrDefault(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
+}

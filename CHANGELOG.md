@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.2](https://github.com/splattner/digitalstrom-vdc-bridge/compare/v0.1.1...v0.1.2) (2026-05-15)
+
+
+### Bug Fixes
+
+* show full vdc dsuid ([#11](https://github.com/splattner/digitalstrom-vdc-bridge/issues/11)) ([2e77a31](https://github.com/splattner/digitalstrom-vdc-bridge/commit/2e77a313b4812f7032ddc803e9c1537cd31a400c))
+
 ## [0.1.1](https://github.com/splattner/digitalstrom-vdc-bridge/compare/v0.1.0...v0.1.1) (2026-05-15)
 
 

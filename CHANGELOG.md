@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.4](https://github.com/splattner/digitalstrom-vdc-bridge/compare/v0.1.3...v0.1.4) (2026-05-15)
+
+
+### Bug Fixes
+
+* haaddon + correct version update ([#15](https://github.com/splattner/digitalstrom-vdc-bridge/issues/15)) ([0da9ed2](https://github.com/splattner/digitalstrom-vdc-bridge/commit/0da9ed2f0c8692b6652e8d9242e42b52bd8757ef))
+
 ## [0.1.3](https://github.com/splattner/digitalstrom-vdc-bridge/compare/v0.1.2...v0.1.3) (2026-05-15)
 
 

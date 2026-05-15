@@ -8,13 +8,112 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  packages: write
 
 jobs:
   release-please:
     runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
     steps:
       - uses: googleapis/release-please-action@v4
+        id: release
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           command: manifest
           default-branch: main
+
+  # ── Build web once whenever a release was just created ──────────────────────
+  web:
+    name: Build web UI
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - run: cd web && npm ci && npm run build
+
+      - name: Upload webdist
+        uses: actions/upload-artifact@v4
+        with:
+          name: webdist
+          path: pkg/httpapi/webdist/
+
+  # ── Cross-compile standalone binaries ───────────────────────────────────────
+  binaries:
+    name: Build binaries
+    needs: [release-please, web]
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            suffix: linux-amd64
+          - goos: linux
+            goarch: arm64
+            suffix: linux-arm64
+          - goos: linux
+            goarch: arm
+            goarm: "7"
+            suffix: linux-armv7
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Download webdist
+        uses: actions/download-artifact@v4
+        with:
+          name: webdist
+          path: pkg/httpapi/webdist/
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          GOARM: ${{ matrix.goarm }}
+        run: |
+          mkdir -p dist
+          go build \
+            -ldflags="-s -w -X github.com/splattner/vdcgo/pkg/vdcgo.Version=${{ needs.release-please.outputs.tag_name }}" \
+            -o dist/vdcgo-daemon \
+            ./cmd/vdcgo-daemon
+          tar -czf dist/vdcgo-daemon-${{ matrix.suffix }}.tar.gz \
+            -C dist vdcgo-daemon
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.suffix }}
+          path: dist/*.tar.gz
+
+  # ── Attach binaries to the GitHub release ───────────────────────────────────
+  upload-assets:
+    name: Upload release assets
+    needs: [release-please, binaries]
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: binary-*
+          path: dist/
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.release-please.outputs.tag_name }}
+          files: dist/*.tar.gz

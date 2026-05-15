@@ -16,7 +16,8 @@ type ConfigField struct {
 	Label string `json:"label"`
 	// Help is an optional help text rendered below the field.
 	Help string `json:"help,omitempty"`
-	// Type is one of: "string", "int", "bool", "password", "select", "object".
+	// Type is one of: "string", "int", "bool", "password", "select",
+	// "multiselect", "object".
 	Type string `json:"type"`
 	// Default is the value used when the field is not present in the config.
 	Default any `json:"default,omitempty"`
@@ -24,8 +25,13 @@ type ConfigField struct {
 	Required bool `json:"required,omitempty"`
 	// Placeholder is shown in empty input fields.
 	Placeholder string `json:"placeholder,omitempty"`
-	// Options is the list of selectable values for Type "select".
+	// Options is the list of selectable values for Type "select" /
+	// "multiselect" when the choices are static.
 	Options []SelectOption `json:"options,omitempty"`
+	// OptionsSource declares a dynamic source for "select" / "multiselect"
+	// fields. Currently supported: "plugin" — the UI fetches options from
+	// GET /api/plugins/{id}/suggest/{key}. When empty, Options is used.
+	OptionsSource string `json:"optionsSource,omitempty"`
 	// Children is the nested field list for Type "object".
 	Children []ConfigField `json:"children,omitempty"`
 	// Min/Max are optional numeric bounds for Type "int".

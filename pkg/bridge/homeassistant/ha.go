@@ -3,9 +3,11 @@ package homeassistant
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/splattner/vdcgo/pkg/bridge"
 	"github.com/splattner/vdcgo/pkg/logging"
@@ -24,6 +26,9 @@ func Factory() bridge.Factory {
 			latestStates:     make(map[string]haEntity),
 			colorState:       make(map[string]colorChannels),
 			sensorDescPushed: make(map[string]bool),
+			lastButtonEvent:  make(map[string]string),
+			buttonHeld:       make(map[string]bool),
+			buttonHoldTimers: make(map[string]*time.Timer),
 		}
 	}
 }
@@ -52,9 +57,23 @@ type Plugin struct {
 	// sensorDescPushed remembers DSUIDs for which we already published the
 	// sensorDescriptor so we don't re-emit it on every state_changed.
 	sensorDescPushed map[string]bool
+	// lastButtonEvent stores the last seen state (timestamp) of an event
+	// entity per DSUID. The first observation seeds the value without firing
+	// an action so that snapshot replay on (re)connect doesn't replay the
+	// last button press.
+	lastButtonEvent map[string]string
+	// buttonHeld tracks whether a button DSUID is currently in a sustained
+	// hold so we know whether to honour an incoming release event.
+	buttonHeld map[string]bool
+	// buttonHoldTimers carries the watchdog cancellation per held DSUID so
+	// silently dropped release events still cause dSS to stop dimming.
+	buttonHoldTimers map[string]*time.Timer
 	// registries holds the most recent area/device/entity registry snapshot
 	// fetched from HA on (re)connect. Used to enrich Discover() attributes.
 	registries haRegistries
+	// filter is the resolved entity-filter configuration (ignore_integrations,
+	// ignore_zigbee2mqtt, ignore_entity_prefixes). Constant after Init.
+	filter entityFilter
 }
 
 // colorChannels caches the most recent per-channel color values for a colorlight.
@@ -75,6 +94,26 @@ func (p *Plugin) Status() string {
 	return "starting"
 }
 
+// Stats returns the number of discovered entities (those matching the filter)
+// and the number that are currently bridged (active subscriptions).
+func (p *Plugin) Stats() bridge.PluginStats {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	// Count only entities classifyEntity would accept and that the filter
+	// doesn't hide — same logic as Discover() without allocating the slice.
+	discovered := 0
+	for _, e := range p.latestStates {
+		if classifyEntity(e) == "" {
+			continue
+		}
+		if p.registries.shouldIgnore(e.EntityID, p.filter) {
+			continue
+		}
+		discovered++
+	}
+	return bridge.PluginStats{Discovered: discovered, Active: len(p.subscribed)}
+}
+
 // Init reads the config, validates it, and starts the WS client in the background.
 func (p *Plugin) Init(ctx context.Context, cfg map[string]any, host bridge.Host) error {
 	p.host = host
@@ -92,6 +131,7 @@ func (p *Plugin) Init(ctx context.Context, cfg map[string]any, host bridge.Host)
 	}
 	p.url = url
 	p.token = token
+	p.filter = parseEntityFilter(cfg)
 
 	p.client = newWSClient(url, token)
 	p.client.onSnapshot = p.handleSnapshot
@@ -128,6 +168,9 @@ func (p *Plugin) Discover(_ context.Context) ([]bridge.RemoteEntity, error) {
 	for _, e := range p.latestStates {
 		kind := classifyEntity(e)
 		if kind == "" {
+			continue
+		}
+		if p.registries.shouldIgnore(e.EntityID, p.filter) {
 			continue
 		}
 		attrs := map[string]any{
@@ -177,6 +220,12 @@ func (p *Plugin) Unsubscribe(_ context.Context, dsuid string) error {
 	}
 	delete(p.colorState, dsuid)
 	delete(p.sensorDescPushed, dsuid)
+	delete(p.lastButtonEvent, dsuid)
+	delete(p.buttonHeld, dsuid)
+	if t, ok := p.buttonHoldTimers[dsuid]; ok {
+		t.Stop()
+		delete(p.buttonHoldTimers, dsuid)
+	}
 	return nil
 }
 
@@ -272,12 +321,69 @@ func (p *Plugin) Close() error {
 	return nil
 }
 
+// Suggest returns dynamic option lists for schema fields whose OptionsSource
+// is "plugin". Currently supported field: "ignore_integrations" — returns the
+// distinct entity registry platforms (each with the count of entities backed
+// by that integration) that the connected HA instance currently exposes.
+func (p *Plugin) Suggest(_ context.Context, field string) ([]bridge.SuggestOption, error) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	switch field {
+	case "ignore_integrations":
+		counts := map[string]int{}
+		for _, e := range p.registries.Entities {
+			if e.Platform == "" {
+				continue
+			}
+			counts[e.Platform]++
+		}
+		out := make([]bridge.SuggestOption, 0, len(counts))
+		for plat, c := range counts {
+			out = append(out, bridge.SuggestOption{
+				Value: plat,
+				Label: fmt.Sprintf("%s (%d)", plat, c),
+				Count: c,
+			})
+		}
+		sort.Slice(out, func(i, j int) bool { return out[i].Value < out[j].Value })
+		return out, nil
+	}
+	return nil, nil
+}
+
 // handleRegistries stores the most recent area / device / entity registry
 // snapshot so Discover() can enrich entries with device + area names.
 func (p *Plugin) handleRegistries(regs haRegistries) {
 	p.mu.Lock()
 	p.registries = regs
+	filter := p.filter
 	p.mu.Unlock()
+
+	// Diagnostics: count how many devices the Z2M heuristic matches and how
+	// many entities would be filtered. Lets the user verify the toggle is
+	// actually doing something against their HA data.
+	z2mDevs := 0
+	for id := range regs.Devices {
+		if regs.isZigbee2MQTTDevice(id) {
+			z2mDevs++
+		}
+	}
+	z2mEnts := 0
+	for _, e := range regs.Entities {
+		if regs.isZigbee2MQTTDevice(e.DeviceID) {
+			z2mEnts++
+		}
+	}
+	p.host.Log(bridge.LevelInfo, bridge.CodeDiscoveryDone, "HA registries loaded",
+		map[string]any{
+			"areas":               len(regs.Areas),
+			"devices":             len(regs.Devices),
+			"entities":            len(regs.Entities),
+			"z2m_devices":         z2mDevs,
+			"z2m_entities":        z2mEnts,
+			"ignore_zigbee2mqtt":  filter.ignoreZigbee2MQTT,
+			"ignore_integrations": keysOf(filter.ignoreIntegrations),
+		})
 }
 
 // handleSnapshot stores the initial state map and emits updates for any
@@ -286,10 +392,16 @@ func (p *Plugin) handleSnapshot(snap map[string]haEntity) {
 	p.mu.Lock()
 	p.latestStates = snap
 	visible := 0
+	filtered := 0
 	for _, e := range snap {
-		if classifyEntity(e) != "" {
-			visible++
+		if classifyEntity(e) == "" {
+			continue
 		}
+		if p.registries.shouldIgnore(e.EntityID, p.filter) {
+			filtered++
+			continue
+		}
+		visible++
 	}
 	// Take a copy of the subscriptions so we can release the lock before
 	// invoking Host callbacks.
@@ -300,7 +412,7 @@ func (p *Plugin) handleSnapshot(snap map[string]haEntity) {
 	p.mu.Unlock()
 
 	p.host.Log(bridge.LevelInfo, bridge.CodeDiscoveryDone, "HA state snapshot received",
-		map[string]any{"total": len(snap), "visible": visible})
+		map[string]any{"total": len(snap), "visible": visible, "filtered": filtered})
 
 	ctx := context.Background()
 	for _, m := range subs {
@@ -342,7 +454,7 @@ func (p *Plugin) handleStateChange(sc stateChange) {
 	// log it if we'd actually classify it as a bridgeable device — otherwise
 	// every weather/sun/script entity would spam the log.
 	if !existed && sc.OldState == nil {
-		if classifyEntity(*sc.NewState) != "" {
+		if classifyEntity(*sc.NewState) != "" && !p.registries.shouldIgnore(sc.EntityID, p.filter) {
 			p.host.Log(bridge.LevelInfo, bridge.CodeEntityAdded, "HA entity appeared",
 				map[string]any{
 					"entity_id": sc.EntityID,
@@ -414,5 +526,108 @@ func (p *Plugin) pushState(ctx context.Context, m bridge.Mapping, e haEntity) {
 		if v, ok := sensorValueFromState(e); ok {
 			_ = p.host.UpdateSensor(ctx, m.DSUID, 0, v)
 		}
+	case "button":
+		// HA event entities advance their state to the timestamp of the
+		// most recent event. Compare with the last seen value: if it changed
+		// (and we had a previous value), the attached event_type tells us
+		// which click verb to forward.
+		p.mu.Lock()
+		prev, hadPrev := p.lastButtonEvent[m.DSUID]
+		p.lastButtonEvent[m.DSUID] = e.State
+		p.mu.Unlock()
+		if !hadPrev || prev == e.State {
+			return
+		}
+		evType, _ := e.Attributes["event_type"].(string)
+		mapped := mapHAEventType(evType)
+		if mapped == "" {
+			return
+		}
+		p.dispatchButtonAction(ctx, m.DSUID, 0, mapped)
 	}
+}
+
+// buttonHoldWatchdog auto-releases a held button if no release event arrives
+// within this window. HA integrations occasionally drop the long_release; the
+// watchdog keeps dSS from dimming forever in that case.
+const buttonHoldWatchdog = 30 * time.Second
+
+// dispatchButtonAction translates a logical action verb (tip/tip2/.../hold/release)
+// into the right sequence of host calls so dSS sees a coherent
+// pressed → released gesture even when HA only sends discrete event_type strings.
+//
+// Behaviour:
+//   - tip / tip2 / tip3 / tip4: synthetic 1 → action → 0 pulse.
+//   - hold: latch value=1, remember the held state, arm a watchdog that
+//     auto-releases after buttonHoldWatchdog if no real release arrives.
+//   - release: only emit value=0 if we previously latched a hold. Cancels
+//     the watchdog. Spurious releases are dropped.
+func (p *Plugin) dispatchButtonAction(ctx context.Context, dsuid string, index int, action string) {
+	switch action {
+	case "release":
+		p.mu.Lock()
+		held := p.buttonHeld[dsuid]
+		if held {
+			delete(p.buttonHeld, dsuid)
+			if t := p.buttonHoldTimers[dsuid]; t != nil {
+				t.Stop()
+				delete(p.buttonHoldTimers, dsuid)
+			}
+		}
+		p.mu.Unlock()
+		if !held {
+			return
+		}
+		_ = p.host.SetButtonAction(ctx, dsuid, index, "release")
+		_ = p.host.UpdateButton(ctx, dsuid, index, 0)
+		return
+
+	case "hold":
+		p.mu.Lock()
+		if t := p.buttonHoldTimers[dsuid]; t != nil {
+			t.Stop()
+		}
+		p.buttonHeld[dsuid] = true
+		p.buttonHoldTimers[dsuid] = time.AfterFunc(buttonHoldWatchdog, func() {
+			p.autoReleaseHold(dsuid, index)
+		})
+		p.mu.Unlock()
+		_ = p.host.UpdateButton(ctx, dsuid, index, 1)
+		_ = p.host.SetButtonAction(ctx, dsuid, index, "hold")
+		return
+
+	default:
+		_ = p.host.UpdateButton(ctx, dsuid, index, 1)
+		_ = p.host.SetButtonAction(ctx, dsuid, index, action)
+		_ = p.host.UpdateButton(ctx, dsuid, index, 0)
+	}
+}
+
+// autoReleaseHold fires when the watchdog expires without a real release.
+func (p *Plugin) autoReleaseHold(dsuid string, index int) {
+	p.mu.Lock()
+	if !p.buttonHeld[dsuid] {
+		p.mu.Unlock()
+		return
+	}
+	delete(p.buttonHeld, dsuid)
+	delete(p.buttonHoldTimers, dsuid)
+	p.mu.Unlock()
+	logging.Warn("homeassistant_button_hold_watchdog", logging.Fields{
+		"dsuid": dsuid,
+		"index": index,
+	})
+	ctx := context.Background()
+	_ = p.host.SetButtonAction(ctx, dsuid, index, "release")
+	_ = p.host.UpdateButton(ctx, dsuid, index, 0)
+}
+
+// keysOf returns the sorted keys of a string-keyed map (used for stable log output).
+func keysOf(m map[string]struct{}) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }

@@ -1778,8 +1778,8 @@ func TestChangedStatePayloadIncludesTypedStates(t *testing.T) {
 	if !ok || b1["value"] != 1.0 {
 		t.Fatalf("expected button index 1 value 1, got %+v", btn)
 	}
-	if b1["action"] != "tip" {
-		t.Fatalf("expected button action tip, got %+v", b1)
+	if b1["clickType"] != 0 {
+		t.Fatalf("expected button clickType 0 (ct_tip_1x), got %+v", b1)
 	}
 	in, ok := p["binaryInputStates"].(map[string]any)
 	if !ok {

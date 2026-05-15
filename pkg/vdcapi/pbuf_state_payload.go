@@ -20,8 +20,8 @@ func changedStatePayload(d ExternalDeviceState) map[string]any {
 	if bs := indexedFloatState(d.Buttons); len(bs) > 0 {
 		for idx, action := range d.ButtonActions {
 			if state, ok := bs[strconv.Itoa(idx)].(map[string]any); ok {
-				if a := strings.TrimSpace(action); a != "" {
-					state["action"] = a
+				if ct, ok := dsClickType(strings.TrimSpace(action)); ok {
+					state["clickType"] = ct
 				}
 			}
 		}
@@ -45,4 +45,26 @@ func indexedFloatState(values map[int]float64) map[string]any {
 		out[strconv.Itoa(idx)] = map[string]any{"value": value}
 	}
 	return out
+}
+
+// dsClickType maps a vdcd-style click action name to the DsClickType integer
+// expected by dSS's proxy device (proxydevice.cpp "clickType" property).
+// Returns (value, true) when a valid mapping exists; (0, false) for unknown/empty actions.
+func dsClickType(action string) (int, bool) {
+	switch action {
+	case "tip", "tip_1x":
+		return 0, true // ct_tip_1x
+	case "tip2", "tip_2x":
+		return 1, true // ct_tip_2x
+	case "tip3", "tip_3x":
+		return 2, true // ct_tip_3x
+	case "tip4", "tip_4x":
+		return 3, true // ct_tip_4x
+	case "hold":
+		return 4, true // ct_hold_start
+	case "release":
+		return 6, true // ct_hold_end
+	default:
+		return 0, false
+	}
 }

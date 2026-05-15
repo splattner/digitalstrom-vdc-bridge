@@ -1,9 +1,9 @@
-import { useCallback } from 'react'
-import type { ConfigFieldSchema, ConfigSchema } from '@/api/client'
+import { useCallback, useEffect, useState } from 'react'
+import { api, type ConfigFieldSchema, type ConfigSchema, type SuggestOption } from '@/api/client'
 
 /**
  * Schema-driven form. Renders fields recursively (string / int / bool /
- * password / select / object).
+ * password / select / multiselect / object).
  *
  * Conventions:
  *   - Password fields show a "(stored — leave blank to keep)" hint when the
@@ -11,6 +11,10 @@ import type { ConfigFieldSchema, ConfigSchema } from '@/api/client'
  *     in the submitted value tells the server "no change", because the empty
  *     password key is omitted from the JSON body before submission.
  *   - The form is fully controlled — `value` is the source of truth.
+ *   - For `multiselect` (and `select`) fields with `optionsSource: "plugin"`,
+ *     pass `pluginId` so the form can fetch suggestions from the running
+ *     plugin instance. Without `pluginId` (e.g. create-plugin modal), such
+ *     fields render as a notice telling the user to save first.
  */
 export interface ConfigFormProps {
   schema: ConfigSchema
@@ -19,9 +23,18 @@ export interface ConfigFormProps {
   onChange: (next: Record<string, unknown>) => void
   /** Field-keys that are read-only (e.g. id when editing). */
   disabled?: string[]
+  /** Plugin instance id, needed to resolve dynamic option sources. */
+  pluginId?: string
 }
 
-export function ConfigForm({ schema, value, secrets = [], onChange, disabled = [] }: ConfigFormProps) {
+export function ConfigForm({
+  schema,
+  value,
+  secrets = [],
+  onChange,
+  disabled = [],
+  pluginId,
+}: ConfigFormProps) {
   const setField = useCallback(
     (path: string[], v: unknown) => {
       onChange(setIn(value, path, v))
@@ -40,6 +53,7 @@ export function ConfigForm({ schema, value, secrets = [], onChange, disabled = [
           secrets={secrets}
           onChange={setField}
           disabled={disabled.includes(f.key)}
+          pluginId={pluginId}
         />
       ))}
     </div>
@@ -53,6 +67,7 @@ function FieldView({
   secrets,
   onChange,
   disabled,
+  pluginId,
 }: {
   field: ConfigFieldSchema
   path: string[]
@@ -60,6 +75,7 @@ function FieldView({
   secrets: string[]
   onChange: (path: string[], v: unknown) => void
   disabled?: boolean
+  pluginId?: string
 }) {
   const id = `cf-${path.join('.')}`
   const dot = path.join('.')
@@ -81,6 +97,7 @@ function FieldView({
             value={getIn(child, [c.key])}
             secrets={secrets}
             onChange={onChange}
+            pluginId={pluginId}
           />
         ))}
       </fieldset>
@@ -93,7 +110,7 @@ function FieldView({
         {field.label}
         {field.required ? <span className="text-destructive ml-0.5">*</span> : null}
       </label>
-      {renderControl(field, id, value, dot, secrets, (v) => onChange(path, v), disabled)}
+      {renderControl(field, id, value, dot, secrets, (v) => onChange(path, v), disabled, pluginId)}
       {field.help ? <p className="text-xs text-muted-foreground">{field.help}</p> : null}
     </div>
   )
@@ -107,6 +124,7 @@ function renderControl(
   secrets: string[],
   onChange: (v: unknown) => void,
   disabled?: boolean,
+  pluginId?: string,
 ) {
   const baseInput =
     'w-full border rounded px-2 py-1 text-sm bg-background focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50 disabled:cursor-not-allowed'
@@ -179,6 +197,17 @@ function renderControl(
         />
       )
     }
+    case 'multiselect':
+      return (
+        <MultiSelectControl
+          field={field}
+          id={id}
+          value={normaliseStringArray(value)}
+          onChange={onChange}
+          disabled={disabled}
+          pluginId={pluginId}
+        />
+      )
     case 'string':
     default:
       return (
@@ -193,6 +222,125 @@ function renderControl(
         />
       )
   }
+}
+
+/** Coerce a value to a string[]. Accepts string[], comma-separated string,
+ *  null/undefined → []. */
+function normaliseStringArray(v: unknown): string[] {
+  if (Array.isArray(v)) return v.map((x) => String(x))
+  if (typeof v === 'string') {
+    return v
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+  }
+  return []
+}
+
+/** Multi-select rendered as a checkbox list, with options sourced either
+ *  statically from `field.options` or dynamically from the plugin's
+ *  `/suggest/{key}` endpoint when `optionsSource === "plugin"`. */
+function MultiSelectControl({
+  field,
+  id,
+  value,
+  onChange,
+  disabled,
+  pluginId,
+}: {
+  field: ConfigFieldSchema
+  id: string
+  value: string[]
+  onChange: (v: string[]) => void
+  disabled?: boolean
+  pluginId?: string
+}) {
+  const dynamic = field.optionsSource === 'plugin'
+  const [opts, setOpts] = useState<SuggestOption[] | null>(
+    dynamic ? null : (field.options ?? []).map((o) => ({ value: o.value, label: o.label })),
+  )
+  const [err, setErr] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!dynamic) return
+    if (!pluginId) {
+      setOpts([])
+      return
+    }
+    let cancelled = false
+    api
+      .pluginSuggest(pluginId, field.key)
+      .then((r) => {
+        if (!cancelled) setOpts(r ?? [])
+      })
+      .catch((e: unknown) => {
+        if (!cancelled) setErr(e instanceof Error ? e.message : String(e))
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [dynamic, pluginId, field.key])
+
+  if (dynamic && !pluginId) {
+    return (
+      <p className="text-xs text-muted-foreground italic border rounded px-2 py-1.5 bg-muted/30">
+        Save the plugin first to load available options.
+      </p>
+    )
+  }
+  if (opts === null) {
+    return <p className="text-xs text-muted-foreground">Loading…</p>
+  }
+  if (err) {
+    return <p className="text-xs text-destructive">Failed to load options: {err}</p>
+  }
+
+  // Make sure currently-selected values that are no longer in the option list
+  // (e.g. integration that was removed from HA) still show up so the user can
+  // un-tick them.
+  const visible = [...opts]
+  for (const v of value) {
+    if (!visible.some((o) => o.value === v)) {
+      visible.push({ value: v, label: `${v} (not present)` })
+    }
+  }
+
+  if (visible.length === 0) {
+    return (
+      <p className="text-xs text-muted-foreground italic border rounded px-2 py-1.5 bg-muted/30">
+        No options available.
+      </p>
+    )
+  }
+
+  const selected = new Set(value)
+  return (
+    <div
+      id={id}
+      className="border rounded px-2 py-1.5 max-h-40 overflow-y-auto space-y-1 bg-background"
+    >
+      {visible.map((o) => (
+        <label
+          key={o.value}
+          className="flex items-center gap-2 text-xs cursor-pointer select-none"
+        >
+          <input
+            type="checkbox"
+            checked={selected.has(o.value)}
+            disabled={disabled}
+            onChange={(e) => {
+              const next = new Set(selected)
+              if (e.target.checked) next.add(o.value)
+              else next.delete(o.value)
+              onChange([...next].sort())
+            }}
+            className="h-3.5 w-3.5"
+          />
+          <span>{o.label || o.value}</span>
+        </label>
+      ))}
+    </div>
+  )
 }
 
 /**

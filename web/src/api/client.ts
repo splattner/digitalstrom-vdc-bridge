@@ -39,17 +39,27 @@ export interface Plugin {
   id: string
   type: string
   status: string
+  enabled: boolean
+  // Optional counters surfaced by plugins that implement bridge.StatsProvider
+  // (currently tasmota, zigbee2mqtt, wled). HA + MQTT do not provide these.
+  stats?: {
+    discovered: number
+    active: number
+  }
 }
 
 export interface ConfigFieldSchema {
   key: string
   label: string
   help?: string
-  type: 'string' | 'int' | 'bool' | 'password' | 'select' | 'object'
+  type: 'string' | 'int' | 'bool' | 'password' | 'select' | 'multiselect' | 'object'
   default?: unknown
   required?: boolean
   placeholder?: string
   options?: { value: string; label: string }[]
+  /** Dynamic source for select/multiselect options. "plugin" → fetched from
+   * GET /api/plugins/{id}/suggest/{key} when an instance id is available. */
+  optionsSource?: 'plugin' | ''
   children?: ConfigFieldSchema[]
   min?: number
   max?: number
@@ -78,6 +88,12 @@ export interface PluginConfigResponse {
 export interface ProbeResult {
   ok: boolean
   error?: string
+}
+
+export interface SuggestOption {
+  value: string
+  label?: string
+  count?: number
 }
 
 export interface RemoteEntity {
@@ -176,12 +192,24 @@ export const api = {
   createPlugin: (req: { id: string; type: string; config: Record<string, unknown> }) =>
     postJSON<PluginConfigResponse>('/plugins', req),
   deletePlugin: (id: string) => del(`/plugins/${encodeURIComponent(id)}`),
+  restartPlugin: (id: string) =>
+    postJSON<{ ok: boolean; error?: string }>(`/plugins/${encodeURIComponent(id)}/restart`, {}),
+  enablePlugin: (id: string) =>
+    postJSON<{ ok: boolean; enabled: boolean; error?: string }>(`/plugins/${encodeURIComponent(id)}/enable`, {}),
+  disablePlugin: (id: string) =>
+    postJSON<{ ok: boolean; enabled: boolean; error?: string }>(`/plugins/${encodeURIComponent(id)}/disable`, {}),
+  rediscoverPlugin: (id: string) =>
+    postJSON<DiscoveredEntity[]>(`/plugins/${encodeURIComponent(id)}/discover`, {}),
   probePlugin: (id: string, config?: Record<string, unknown>) =>
     postJSON<ProbeResult>(`/plugins/${encodeURIComponent(id)}/probe`, { config: config ?? null }),
   probePluginType: (type: string, config: Record<string, unknown>) =>
     postJSON<ProbeResult>(`/plugin-types/${encodeURIComponent(type)}/probe`, { config }),
   discovered: (pluginId: string) =>
     get<DiscoveredEntity[]>(`/plugins/${encodeURIComponent(pluginId)}/discovered`),
+  pluginSuggest: (id: string, field: string) =>
+    get<SuggestOption[]>(
+      `/plugins/${encodeURIComponent(id)}/suggest/${encodeURIComponent(field)}`,
+    ),
   bridges: () => get<Mapping[]>('/bridges'),
   createBridge: (req: CreateBridgeRequest) =>
     postJSON<Mapping>('/bridges', req),

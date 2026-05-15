@@ -10,25 +10,37 @@ import (
 
 // pluginInfo is the JSON shape returned by GET /api/plugins.
 type pluginInfo struct {
-	ID     string `json:"id"`
-	Type   string `json:"type"`
-	Status string `json:"status"`
+	ID      string              `json:"id"`
+	Type    string              `json:"type"`
+	Status  string              `json:"status"`
+	Enabled bool                `json:"enabled"`
+	Stats   *bridge.PluginStats `json:"stats,omitempty"`
 }
 
-// handlePlugins lists all running plugin instances with their status.
+// handlePlugins lists all configured plugin instances with their status.
+// Disabled plugins are included with status="disabled" so the UI can show
+// them and offer to re-enable them.
 func (s *Server) handlePlugins(w http.ResponseWriter, r *http.Request) {
 	if s.cfg.Bridges == nil {
 		writeJSON(w, http.StatusOK, []pluginInfo{})
 		return
 	}
-	plugins := s.cfg.Bridges.Instances()
-	out := make([]pluginInfo, len(plugins))
-	for i, p := range plugins {
-		info := pluginInfo{ID: p.ID(), Status: p.Status()}
-		if cfg, ok := s.cfg.Bridges.Config(p.ID()); ok {
-			info.Type = cfg.Type
+	configs := s.cfg.Bridges.Configs()
+	out := make([]pluginInfo, 0, len(configs))
+	for _, cfg := range configs {
+		info := pluginInfo{ID: cfg.ID, Type: cfg.Type, Enabled: !cfg.Disabled}
+		if cfg.Disabled {
+			info.Status = "disabled"
+		} else if p, ok := s.cfg.Bridges.Plugin(cfg.ID); ok {
+			info.Status = p.Status()
+			if sp, ok := p.(bridge.StatsProvider); ok {
+				st := sp.Stats()
+				info.Stats = &st
+			}
+		} else {
+			info.Status = "stopped"
 		}
-		out[i] = info
+		out = append(out, info)
 	}
 	writeJSON(w, http.StatusOK, out)
 }

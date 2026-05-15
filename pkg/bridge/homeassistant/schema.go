@@ -26,6 +26,27 @@ func RegisterEntry() bridge.FactoryEntry {
 					Required:    true,
 					Placeholder: "Created in HA → user profile → Long-lived access tokens",
 				},
+				{
+					Key:           "ignore_integrations",
+					Label:         "Ignore integrations",
+					Type:          "multiselect",
+					OptionsSource: "plugin",
+					Help:          "Skip entities backed by these Home Assistant integrations. The list is populated from the platforms currently present in your HA instance — save the plugin first to see the choices.",
+				},
+				{
+					Key:     "ignore_zigbee2mqtt",
+					Label:   "Ignore Zigbee2MQTT devices",
+					Type:    "bool",
+					Default: false,
+					Help:    "Skip entities backed by devices discovered via Zigbee2MQTT. Use this when you bridge Z2M directly via the Zigbee2MQTT plugin to avoid duplicates without ignoring all of MQTT.",
+				},
+				{
+					Key:         "ignore_entity_prefixes",
+					Label:       "Ignore entity prefixes",
+					Type:        "string",
+					Placeholder: "sensor.battery_, binary_sensor.linkquality_",
+					Help:        "Comma-separated list of entity_id prefixes to ignore.",
+				},
 			},
 		},
 	}

@@ -64,8 +64,55 @@ type PluginConfig struct {
 	// Type identifies the registered factory (e.g. "homeassistant").
 	Type   string         `json:"type"`
 	Config map[string]any `json:"config"`
+	// Disabled, when true, keeps the plugin config (and any bridge mappings
+	// it owns) on disk but skips starting the instance. Use a "disabled"
+	// rather than "enabled" flag so that a missing/false value in older
+	// plugins.json files keeps existing behaviour.
+	Disabled bool `json:"disabled,omitempty"`
 }
 
 // Factory creates a new Plugin instance for a given plugin type.
 // The id parameter is the instance identifier from PluginConfig.ID.
 type Factory func(id string) Plugin
+
+// Suggester is an optional plugin capability: plugins implementing this
+// interface advertise dynamic option lists for "select" / "multiselect"
+// schema fields whose OptionsSource is "plugin". The HTTP API exposes them
+// at GET /api/plugins/{id}/suggest/{field}.
+//
+// Implementations should be cheap (in-memory, no blocking I/O) and return an
+// empty slice when no suggestions are available yet (e.g. before the plugin
+// has connected to its remote system).
+type Suggester interface {
+	Suggest(ctx context.Context, field string) ([]SuggestOption, error)
+}
+
+// SuggestOption is one entry returned by Suggester.Suggest.
+type SuggestOption struct {
+	Value string `json:"value"`
+	Label string `json:"label,omitempty"`
+	// Count optionally reports how many entities the value applies to,
+	// helping users decide whether the option is relevant to ignore.
+	Count int `json:"count,omitempty"`
+}
+
+// PluginStats is the lightweight counter snapshot returned by plugins that
+// implement the optional StatsProvider interface. The numbers are advisory
+// (used by the UI to show "discovered / bridged" in the plugin table) and
+// must be cheap to compute (in-memory, non-blocking).
+type PluginStats struct {
+	// Discovered is the number of devices the plugin has currently observed
+	// on the remote side (e.g. via MQTT autodiscovery, mDNS, or a snapshot
+	// from the remote system). Includes both bridged and unbridged.
+	Discovered int `json:"discovered"`
+	// Active is the number of those devices that are currently bridged /
+	// have an active subscription / forwarder.
+	Active int `json:"active"`
+}
+
+// StatsProvider is an optional plugin capability for surfacing device
+// counters in the API. Plugins that do not implement it simply return no
+// stats and the UI falls back to mapping-derived counts.
+type StatsProvider interface {
+	Stats() PluginStats
+}

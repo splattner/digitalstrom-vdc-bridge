@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/splattner/vdcgo/pkg/bridge"
 	"github.com/splattner/vdcgo/pkg/logging"
@@ -60,6 +61,12 @@ func (d *discoveredDevice) endpoint(name string) (endpoint, bool) {
 	return endpoint{}, false
 }
 
+// buttonHoldWatchdog auto-releases a held button if no release event arrives
+// within this window. Some Z2M devices drop their *_release message; without
+// this safety net dSS would think the button is permanently held and keep
+// dimming the room.
+const buttonHoldWatchdog = 30 * time.Second
+
 type deviceSub struct {
 	mapping bridge.Mapping
 	ieee    string
@@ -68,22 +75,31 @@ type deviceSub struct {
 	// cached HSV used to merge single-axis hue/sat updates.
 	hue float64
 	sat float64
+
+	// held tracks whether button index i is currently in a sustained hold,
+	// indexed by button index. holdTimers carries the watchdog cancellation
+	// that fires an automatic release when the upstream silently drops the
+	// real *_release event. Both maps are guarded by the parent Plugin mutex.
+	held       map[int]bool
+	holdTimers map[int]*time.Timer
 }
 
 // ID returns the plugin instance id.
 func (p *Plugin) ID() string { return p.id }
 
-// Status reports broker status plus device/mapping counts.
+// Status reports the underlying broker connection state.
 func (p *Plugin) Status() string {
 	if p.broker == nil {
 		return "not_initialized"
 	}
-	s := p.broker.Status()
+	return p.broker.Status()
+}
+
+// Stats reports the discovered and active (subscribed) device counts.
+func (p *Plugin) Stats() bridge.PluginStats {
 	p.mu.Lock()
-	d := len(p.devices)
-	a := len(p.subscribed)
-	p.mu.Unlock()
-	return fmt.Sprintf("%s · %d device(s) · %d active", s, d, a)
+	defer p.mu.Unlock()
+	return bridge.PluginStats{Discovered: len(p.devices), Active: len(p.subscribed)}
 }
 
 // Init resolves the broker and subscribes to <base>/bridge/devices.
@@ -157,7 +173,13 @@ func (p *Plugin) Discover(_ context.Context) ([]bridge.RemoteEntity, error) {
 // Subscribe records the mapping and (if device is known) installs state subs.
 func (p *Plugin) Subscribe(_ context.Context, m bridge.Mapping) error {
 	ieee, epName := parseEntityID(m.RemoteEntityID)
-	sub := &deviceSub{mapping: m, ieee: ieee, epName: epName}
+	sub := &deviceSub{
+		mapping:    m,
+		ieee:       ieee,
+		epName:     epName,
+		held:       make(map[int]bool),
+		holdTimers: make(map[int]*time.Timer),
+	}
 	p.mu.Lock()
 	p.subscribed[m.DSUID] = sub
 	dev := p.devices[ieee]
@@ -343,14 +365,23 @@ func (p *Plugin) activate(sub *deviceSub, dev *discoveredDevice) {
 
 	subs := make([]mqttsvc.Subscription, 0, 2)
 
-	if s, err := p.broker.Subscribe(stateTopic, 0, func(_ string, payload []byte, _ bool) {
+	if s, err := p.broker.Subscribe(stateTopic, 0, func(_ string, payload []byte, retained bool) {
 		var msg stateMessage
 		if err := json.Unmarshal(payload, &msg); err != nil {
+			logging.Debug("zigbee2mqtt_state_unmarshal_error", logging.Fields{
+				"topic": stateTopic, "error": err.Error(),
+			})
 			return
 		}
-		p.applyState(sub, dev, msg)
+		p.applyState(sub, dev, msg, retained)
 	}); err == nil {
 		subs = append(subs, s)
+		logging.Debug("zigbee2mqtt_state_topic_subscribed", logging.Fields{
+			"topic":    stateTopic,
+			"dsuid":    sub.mapping.DSUID,
+			"endpoint": sub.epName,
+			"kind":     dev.endpoints[0].Kind,
+		})
 	} else {
 		logging.Warn("zigbee2mqtt_state_subscribe", logging.Fields{
 			"topic": stateTopic, "error": err.Error(),
@@ -392,11 +423,76 @@ func (p *Plugin) activate(sub *deviceSub, dev *discoveredDevice) {
 }
 
 // applyState forwards a state JSON to the host's channel/active state.
-func (p *Plugin) applyState(sub *deviceSub, dev *discoveredDevice, msg stateMessage) {
+func (p *Plugin) applyState(sub *deviceSub, dev *discoveredDevice, msg stateMessage, retained bool) {
 	ctx := context.Background()
 	ep, ok := dev.endpoint(sub.epName)
 	if !ok {
 		return
+	}
+
+	// Button entities only react to the action property, never to channel
+	// state. Retained messages re-fire the last action on plugin restart and
+	// are intentionally ignored.
+	if ep.Kind == "button" {
+		if retained {
+			return
+		}
+		action, ok := msg.stringField(ep.ActionProp)
+		if !ok || action == "" {
+			return
+		}
+		prefix, suffix := splitButtonAction(action)
+		if suffix == "" {
+			logging.Debug("zigbee2mqtt_button_action_unknown", logging.Fields{
+				"dsuid":  sub.mapping.DSUID,
+				"ieee":   sub.ieee,
+				"action": action,
+				"reason": "unrecognised verb (not in tip/click/press/double/triple/quadruple/long/hold/release vocabulary)",
+			})
+			return
+		}
+		if prefix != ep.ActionPrefix {
+			logging.Debug("zigbee2mqtt_button_action_other_button", logging.Fields{
+				"dsuid":      sub.mapping.DSUID,
+				"ieee":       sub.ieee,
+				"action":     action,
+				"got_prefix": prefix,
+				"my_prefix":  ep.ActionPrefix,
+			})
+			return
+		}
+		mapped := mapActionSuffix(suffix)
+		if mapped == "" {
+			logging.Debug("zigbee2mqtt_button_action_unmapped", logging.Fields{
+				"dsuid":  sub.mapping.DSUID,
+				"ieee":   sub.ieee,
+				"action": action,
+				"suffix": suffix,
+			})
+			return
+		}
+		logging.Info("zigbee2mqtt_button_action", logging.Fields{
+			"dsuid":  sub.mapping.DSUID,
+			"ieee":   sub.ieee,
+			"action": action,
+			"mapped": mapped,
+		})
+		p.dispatchButtonAction(ctx, sub, 0, mapped)
+		return
+	}
+
+	// Diagnostic: a non-button mapping that nevertheless carries an `action`
+	// field usually means the device was bridged before the plugin learned to
+	// expand action enums. Surface it so the user can re-discover/re-bridge.
+	if action, ok := msg.stringField("action"); ok && action != "" {
+		logging.Debug("zigbee2mqtt_action_on_non_button", logging.Fields{
+			"dsuid":    sub.mapping.DSUID,
+			"ieee":     sub.ieee,
+			"endpoint": sub.epName,
+			"kind":     ep.Kind,
+			"action":   action,
+			"hint":     "re-discover and re-bridge this device as a button",
+		})
 	}
 
 	on := true
@@ -471,4 +567,81 @@ func parseConfig(raw map[string]any) (config, error) {
 		}
 	}
 	return c, nil
+}
+
+// dispatchButtonAction translates a logical action verb (tip/tip2/.../hold/release)
+// into the right sequence of host calls so that dSS sees a coherent
+// pressed → released gesture even when the upstream only sends discrete events.
+//
+// Behaviour:
+//   - tip / tip2 / tip3 / tip4: synthetic 1 → action → 0 pulse.
+//   - hold: latch value=1 and remember the held state. Arm a watchdog that
+//     auto-releases after buttonHoldWatchdog if no real release arrives.
+//   - release: only emit value=0 if we previously latched a hold. Cancels
+//     the watchdog. Spurious releases are dropped.
+func (p *Plugin) dispatchButtonAction(ctx context.Context, sub *deviceSub, index int, action string) {
+	switch action {
+	case "release":
+		p.mu.Lock()
+		held := sub.held[index]
+		if held {
+			delete(sub.held, index)
+			if t := sub.holdTimers[index]; t != nil {
+				t.Stop()
+				delete(sub.holdTimers, index)
+			}
+		}
+		p.mu.Unlock()
+		if !held {
+			return
+		}
+		_ = p.host.SetButtonAction(ctx, sub.mapping.DSUID, index, "release")
+		_ = p.host.UpdateButton(ctx, sub.mapping.DSUID, index, 0)
+		return
+
+	case "hold":
+		p.mu.Lock()
+		// Cancel any prior watchdog and (re)arm. We always overwrite to
+		// extend the deadline on repeated hold notifications.
+		if t := sub.holdTimers[index]; t != nil {
+			t.Stop()
+		}
+		sub.held[index] = true
+		dsuid := sub.mapping.DSUID
+		sub.holdTimers[index] = time.AfterFunc(buttonHoldWatchdog, func() {
+			p.autoReleaseHold(sub, index, dsuid)
+		})
+		p.mu.Unlock()
+		_ = p.host.UpdateButton(ctx, sub.mapping.DSUID, index, 1)
+		_ = p.host.SetButtonAction(ctx, sub.mapping.DSUID, index, "hold")
+		return
+
+	default:
+		// Discrete tip events: 1 → action → 0.
+		_ = p.host.UpdateButton(ctx, sub.mapping.DSUID, index, 1)
+		_ = p.host.SetButtonAction(ctx, sub.mapping.DSUID, index, action)
+		_ = p.host.UpdateButton(ctx, sub.mapping.DSUID, index, 0)
+	}
+}
+
+// autoReleaseHold fires when the watchdog expires without a real release.
+// It clears the held state and pushes a synthetic release to dSS so that
+// any in-progress dimming is stopped and the local controller observes the
+// gesture's end.
+func (p *Plugin) autoReleaseHold(sub *deviceSub, index int, dsuid string) {
+	p.mu.Lock()
+	if !sub.held[index] {
+		p.mu.Unlock()
+		return
+	}
+	delete(sub.held, index)
+	delete(sub.holdTimers, index)
+	p.mu.Unlock()
+	logging.Warn("zigbee2mqtt_button_hold_watchdog", logging.Fields{
+		"dsuid": dsuid,
+		"index": index,
+	})
+	ctx := context.Background()
+	_ = p.host.SetButtonAction(ctx, dsuid, index, "release")
+	_ = p.host.UpdateButton(ctx, dsuid, index, 0)
 }

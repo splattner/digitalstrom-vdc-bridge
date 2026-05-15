@@ -171,6 +171,15 @@ func (r *Registry) Start(ctx context.Context, configs []PluginConfig) error {
 	r.mu.Unlock()
 
 	for _, pc := range configs {
+		if pc.Disabled {
+			// Remember the config so it can be re-enabled later, but do not
+			// instantiate the plugin and do not subscribe its mappings.
+			r.mu.Lock()
+			r.configs[pc.ID] = pc
+			r.mu.Unlock()
+			r.sinkEmit(pc.ID, LevelInfo, CodePluginStopped, "plugin disabled, not started", map[string]any{"type": pc.Type})
+			continue
+		}
 		if err := r.startPlugin(ctx, pc); err != nil {
 			logging.Warn("bridge_plugin_start_error", logging.Fields{
 				"id":    pc.ID,
@@ -186,8 +195,17 @@ func (r *Registry) Start(ctx context.Context, configs []PluginConfig) error {
 	for _, m := range r.mappings.List() {
 		r.mu.RLock()
 		p, ok := r.instances[m.PluginID]
+		cfg, hasCfg := r.configs[m.PluginID]
 		r.mu.RUnlock()
 		if !ok {
+			if hasCfg && cfg.Disabled {
+				// Mapping belongs to a disabled plugin: still announce it so
+				// the device exists, but skip subscribe (no live updates).
+				if err := r.host.AnnounceDevice(ctx, m); err != nil {
+					logging.Warn("bridge_restore_announce_error", logging.Fields{"dsuid": m.DSUID, "error": err.Error()})
+				}
+				continue
+			}
 			logging.Warn("bridge_orphan_mapping", logging.Fields{"plugin_id": m.PluginID, "dsuid": m.DSUID})
 			continue
 		}
@@ -243,7 +261,10 @@ func (r *Registry) AddPlugin(ctx context.Context, pc PluginConfig) error {
 	if exists {
 		return fmt.Errorf("plugin %q already exists", pc.ID)
 	}
-	if err := r.startPlugin(ctx, pc); err != nil {
+	// Plugins spawn long-lived goroutines tied to the ctx passed to Init,
+	// so use the registry's runtime ctx — the caller's ctx is typically
+	// the short-lived HTTP request ctx and would cancel on response send.
+	if err := r.startPlugin(r.runtimeCtx(ctx), pc); err != nil {
 		return err
 	}
 	r.persistConfigs()
@@ -293,7 +314,9 @@ func (r *Registry) UpdatePlugin(ctx context.Context, pc PluginConfig) error {
 	if err := old.Close(); err != nil {
 		logging.Warn("bridge_plugin_close_error", logging.Fields{"id": pc.ID, "error": err.Error()})
 	}
-	if err := r.startPlugin(ctx, pc); err != nil {
+	// See AddPlugin: use the long-lived runtime ctx for the new instance.
+	runCtx := r.runtimeCtx(ctx)
+	if err := r.startPlugin(runCtx, pc); err != nil {
 		return err
 	}
 	// Re-subscribe persisted mappings on the fresh instance.
@@ -302,7 +325,7 @@ func (r *Registry) UpdatePlugin(ctx context.Context, pc PluginConfig) error {
 	r.mu.RUnlock()
 	if fresh != nil {
 		for _, m := range r.mappings.ListForPlugin(pc.ID) {
-			if err := fresh.Subscribe(ctx, m); err != nil {
+			if err := fresh.Subscribe(runCtx, m); err != nil {
 				logging.Warn("bridge_resubscribe_error", logging.Fields{"dsuid": m.DSUID, "error": err.Error()})
 			}
 		}
@@ -311,6 +334,116 @@ func (r *Registry) UpdatePlugin(ctx context.Context, pc PluginConfig) error {
 	r.emit("pluginUpdated", map[string]any{"id": pc.ID, "type": pc.Type})
 	r.sinkEmit(pc.ID, LevelInfo, CodePluginRestarted, "plugin config updated and restarted", map[string]any{"type": pc.Type})
 	return nil
+}
+
+// RestartPlugin stops the running instance (if any) and starts a fresh one
+// with the persisted config, then re-subscribes existing mappings. Refuses
+// to act on a disabled plugin (call SetEnabled first).
+func (r *Registry) RestartPlugin(ctx context.Context, id string) error {
+	r.mu.RLock()
+	pc, hasCfg := r.configs[id]
+	r.mu.RUnlock()
+	if !hasCfg {
+		return fmt.Errorf("plugin %q not found", id)
+	}
+	if pc.Disabled {
+		return fmt.Errorf("plugin %q is disabled", id)
+	}
+	r.mu.Lock()
+	old, hadInstance := r.instances[id]
+	delete(r.instances, id)
+	r.mu.Unlock()
+	if hadInstance {
+		if err := old.Close(); err != nil {
+			logging.Warn("bridge_plugin_close_error", logging.Fields{"id": id, "error": err.Error()})
+		}
+	}
+	runCtx := r.runtimeCtx(ctx)
+	if err := r.startPlugin(runCtx, pc); err != nil {
+		return err
+	}
+	r.mu.RLock()
+	fresh := r.instances[id]
+	r.mu.RUnlock()
+	if fresh != nil {
+		for _, m := range r.mappings.ListForPlugin(id) {
+			if err := fresh.Subscribe(runCtx, m); err != nil {
+				logging.Warn("bridge_resubscribe_error", logging.Fields{"dsuid": m.DSUID, "error": err.Error()})
+			}
+		}
+	}
+	r.emit("pluginUpdated", map[string]any{"id": id, "type": pc.Type})
+	r.sinkEmit(id, LevelInfo, CodePluginRestarted, "plugin restarted", map[string]any{"type": pc.Type})
+	return nil
+}
+
+// SetEnabled toggles a plugin's enabled flag. Disabling stops the running
+// instance but keeps the config and any bridge mappings on disk; enabling
+// starts the plugin with the persisted config and re-subscribes mappings.
+func (r *Registry) SetEnabled(ctx context.Context, id string, enabled bool) error {
+	r.mu.Lock()
+	pc, hasCfg := r.configs[id]
+	r.mu.Unlock()
+	if !hasCfg {
+		return fmt.Errorf("plugin %q not found", id)
+	}
+	wasDisabled := pc.Disabled
+	if wasDisabled == !enabled {
+		return nil // no-op
+	}
+	pc.Disabled = !enabled
+	if enabled {
+		runCtx := r.runtimeCtx(ctx)
+		if err := r.startPlugin(runCtx, pc); err != nil {
+			return err
+		}
+		r.mu.RLock()
+		fresh := r.instances[id]
+		r.mu.RUnlock()
+		if fresh != nil {
+			for _, m := range r.mappings.ListForPlugin(id) {
+				if err := fresh.Subscribe(runCtx, m); err != nil {
+					logging.Warn("bridge_resubscribe_error", logging.Fields{"dsuid": m.DSUID, "error": err.Error()})
+				}
+			}
+		}
+		r.emit("pluginUpdated", map[string]any{"id": id, "type": pc.Type})
+		r.sinkEmit(id, LevelInfo, CodePluginStarted, "plugin enabled", map[string]any{"type": pc.Type})
+	} else {
+		r.mu.Lock()
+		old, hadInstance := r.instances[id]
+		delete(r.instances, id)
+		r.configs[id] = pc
+		r.mu.Unlock()
+		if hadInstance {
+			for _, m := range r.mappings.ListForPlugin(id) {
+				_ = old.Unsubscribe(ctx, m.DSUID)
+			}
+			if err := old.Close(); err != nil {
+				logging.Warn("bridge_plugin_close_error", logging.Fields{"id": id, "error": err.Error()})
+			}
+		}
+		r.emit("pluginUpdated", map[string]any{"id": id, "type": pc.Type})
+		r.sinkEmit(id, LevelInfo, CodePluginStopped, "plugin disabled", map[string]any{"type": pc.Type})
+	}
+	// Persist the toggled state.
+	r.mu.Lock()
+	r.configs[id] = pc
+	r.mu.Unlock()
+	r.persistConfigs()
+	return nil
+}
+
+// IsEnabled reports whether the plugin with the given id is configured to run.
+// Returns true for unknown ids (caller should validate existence separately).
+func (r *Registry) IsEnabled(id string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	cfg, ok := r.configs[id]
+	if !ok {
+		return true
+	}
+	return !cfg.Disabled
 }
 
 // persistConfigs invokes the registered Persister with the current config list.
@@ -335,6 +468,18 @@ func (r *Registry) RuntimeContext() context.Context {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.ctx
+}
+
+// runtimeCtx returns the registry's long-lived ctx if Start has been called,
+// otherwise falls back to the supplied ctx (e.g. tests that drive the
+// registry without Start).
+func (r *Registry) runtimeCtx(fallback context.Context) context.Context {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if r.ctx != nil {
+		return r.ctx
+	}
+	return fallback
 }
 
 // Instances returns a snapshot of all running plugin instances.

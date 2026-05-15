@@ -10,10 +10,13 @@ import {
   Copy,
   Info,
   MoreVertical,
+  MousePointerClick,
+  Link2,
 } from 'lucide-react'
 import { api, connectEvents, type Device, type Mapping, type WsEvent } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { useToasts } from '@/lib/toasts'
+import { clusterSiblings, siblingKeyOf } from '@/lib/siblings'
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -21,6 +24,8 @@ interface ChannelState  { value: number; age: number }
 interface ChannelDesc   { name: string; siunit?: string; symbol?: string; min?: number; max?: number }
 interface SensorState   { value: number; age: number; error?: number }
 interface SensorDesc    { name?: string; siunit?: string; symbol?: string; sensorType?: number; min?: number; max?: number }
+interface ButtonState   { value: number; age: number; action?: string }
+interface ButtonDesc    { name?: string; buttonID?: number }
 
 function getChannelStates(d: Device): Record<string, ChannelState> {
   const cs = d.channelStates
@@ -48,6 +53,22 @@ function getSensorDescs(d: Device): Record<string, SensorDesc> {
   const s = d.sensorDescriptions
   if (s && typeof s === 'object' && !Array.isArray(s)) return s as Record<string, SensorDesc>
   return {}
+}
+
+function getButtonStates(d: Device): Record<string, ButtonState> {
+  const s = d.buttonInputStates
+  if (s && typeof s === 'object' && !Array.isArray(s)) return s as Record<string, ButtonState>
+  return {}
+}
+
+function getButtonDescs(d: Device): Record<string, ButtonDesc> {
+  const s = d.buttonInputDescriptions
+  if (s && typeof s === 'object' && !Array.isArray(s)) return s as Record<string, ButtonDesc>
+  return {}
+}
+
+function isButtonDevice(d: Device): boolean {
+  return String(d.outputType ?? '').toLowerCase() === 'button'
 }
 
 function isSensorDevice(d: Device): boolean {
@@ -159,6 +180,59 @@ function ChannelBadges({ device }: { device: Device }) {
   )
 }
 
+// ── ActionLabel – human-readable click type label ─────────────────────────────
+
+const ACTION_LABELS: Record<string, string> = {
+  tip:   '1×',
+  tip2:  '2×',
+  tip3:  '3×',
+  tip4:  '4×',
+  hold:  'hold',
+  dimup: 'dim ↑',
+  dimdown: 'dim ↓',
+}
+
+function actionLabel(action: string): string {
+  return ACTION_LABELS[action] ?? action
+}
+
+// ── ButtonRowBadge – compact button summary for the table row ─────────────────
+
+function ButtonRowBadge({ device, flashAt }: { device: Device; flashAt?: number }) {
+  const states = getButtonStates(device)
+  const keys   = Object.keys(states).sort()
+  const isFlashing = flashAt != null && (Date.now() - flashAt) < 2000
+
+  // Most recent action across all buttons
+  const lastAction = keys.reduce<string | undefined>((best, k) => {
+    const a = states[k]?.action
+    if (!a) return best
+    return a
+  }, undefined)
+
+  return (
+    <div className="flex items-center gap-2">
+      <span
+        className={`flex items-center justify-center h-6 w-6 rounded-md transition-all duration-200 ${
+          isFlashing
+            ? 'bg-violet-500/30 text-violet-600 dark:text-violet-400 ring-2 ring-violet-500/40'
+            : 'bg-violet-500/10 text-violet-600 dark:text-violet-400'
+        }`}
+      >
+        <MousePointerClick className={`h-3.5 w-3.5 ${isFlashing ? 'animate-bounce' : ''}`} />
+      </span>
+      {lastAction ? (
+        <span className="text-xs font-mono text-muted-foreground">{actionLabel(lastAction)}</span>
+      ) : (
+        <span className="text-muted-foreground/50 text-xs">waiting…</span>
+      )}
+      {keys.length > 1 && (
+        <span className="text-[10px] text-muted-foreground/60">{keys.length} btns</span>
+      )}
+    </div>
+  )
+}
+
 // ── DevicesPage ───────────────────────────────────────────────────────────────
 
 export default function DevicesPage() {
@@ -189,6 +263,8 @@ export default function DevicesPage() {
   const [search, setSearch] = useState('')
   const [groupFilter, setGroupFilter] = useState<number | null>(null)
   const [activeOnly, setActiveOnly] = useState(false)
+  // dsuid → epoch ms of the most recent button_action event (for flash animation)
+  const [buttonFlash, setButtonFlash] = useState<Record<string, number>>({})
   const wsCleanup = useRef<(() => void) | null>(null)
 
   useEffect(() => {
@@ -197,6 +273,10 @@ export default function DevicesPage() {
         void qc.invalidateQueries({ queryKey: ['devices'] })
         if (selected && e.dsuid === selected.dSUID) {
           void qc.invalidateQueries({ queryKey: ['device', selected.dSUID] })
+        }
+        const evType = (e.data as Record<string, unknown> | undefined)?.eventType
+        if (evType === 'button_action' && e.dsuid) {
+          setButtonFlash((prev) => ({ ...prev, [e.dsuid!]: Date.now() }))
         }
       }
     })
@@ -224,6 +304,17 @@ export default function DevicesPage() {
       return true
     })
   }, [rows, search, groupFilter, activeOnly])
+
+  // Cluster sibling devices (e.g. Z2M split-button entries with the same IEEE)
+  // so they always appear adjacent regardless of the active group-by choice.
+  const { ordered, siblingInfo } = useMemo(
+    () => clusterSiblings(
+      filtered,
+      (d) => siblingKeyOf(bridgeByDSUID.get(d.dSUID)),
+      (d) => d.dSUID,
+    ),
+    [filtered, bridgeByDSUID],
+  )
 
   if (isLoading) return <p className="text-muted-foreground">Loading devices…</p>
   if (error)     return <p className="text-destructive">Failed to load devices.</p>
@@ -347,10 +438,11 @@ export default function DevicesPage() {
                     </td>
                   </tr>
                 )}
-                {filtered.map((d) => {
+                {ordered.map((d) => {
                   const isOpen = expanded === d.dSUID
                   const groupInfo = dsGroupInfo(d.primaryGroup)
                   const bridge = bridgeByDSUID.get(d.dSUID)
+                  const sib = siblingInfo.get(d.dSUID)
 
                   return (
                     <Fragment key={d.dSUID}>
@@ -360,7 +452,11 @@ export default function DevicesPage() {
                         }`}
                         onClick={() => setExpanded(isOpen ? null : d.dSUID)}
                       >
-                        <td className="px-2 py-3 text-muted-foreground">
+                        <td
+                          className="px-2 py-3 text-muted-foreground"
+                          style={sib ? { boxShadow: `inset 4px 0 0 ${sib.color}` } : undefined}
+                          title={sib ? `Part of ${sib.prefix} (${sib.size} devices on the same physical hardware)` : undefined}
+                        >
                           {isOpen
                             ? <ChevronDown className="h-4 w-4" />
                             : <ChevronRight className="h-4 w-4" />}
@@ -375,7 +471,21 @@ export default function DevicesPage() {
                               <Lightbulb className="h-3.5 w-3.5" />
                             </span>
                             <div className="min-w-0">
-                              <div className="font-medium truncate">{String(d.name ?? '—')}</div>
+                              <div className="font-medium truncate flex items-center gap-1.5">
+                                <span className="truncate">{String(d.name ?? '—')}</span>
+                                {sib && (
+                                  <button
+                                    type="button"
+                                    onClick={(ev) => { ev.stopPropagation(); setSearch(sib.prefix) }}
+                                    className="inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[10px] font-mono leading-none hover:bg-muted shrink-0"
+                                    style={{ color: sib.color }}
+                                    title={`Part of ${sib.prefix} — click to filter to its ${sib.size} siblings`}
+                                  >
+                                    <Link2 className="h-3 w-3" />
+                                    {sib.index + 1}/{sib.size}
+                                  </button>
+                                )}
+                              </div>
                               <div className="text-[11px] text-muted-foreground truncate">
                                 {groupInfo.name}
                               </div>
@@ -391,7 +501,9 @@ export default function DevicesPage() {
                           />
                         </td>
                         <td className="px-3 py-3">
-                          <ChannelBadges device={d} />
+                          {isButtonDevice(d)
+                            ? <ButtonRowBadge device={d} flashAt={buttonFlash[d.dSUID]} />
+                            : <ChannelBadges device={d} />}
                         </td>
                         <td className="px-3 py-3 hidden md:table-cell">
                           {bridge ? (
@@ -421,6 +533,7 @@ export default function DevicesPage() {
                             <ExpandedRow
                               device={d}
                               bridge={bridge}
+                              flashAt={buttonFlash[d.dSUID]}
                               onClose={() => setExpanded(null)}
                               onUnbridge={() => {
                                 if (bridge) {
@@ -486,11 +599,12 @@ export default function DevicesPage() {
 
 // ── ExpandedRow – inline foldable detail panel ───────────────────────────────
 
-type DetailTab = 'overview' | 'channels' | 'sensors' | 'metadata'
+type DetailTab = 'overview' | 'channels' | 'sensors' | 'buttons' | 'metadata'
 
 function ExpandedRow({
   device,
   bridge,
+  flashAt,
   onClose,
   onUnbridge,
   unbridgePending,
@@ -498,20 +612,25 @@ function ExpandedRow({
 }: {
   device: Device
   bridge: Mapping | undefined
+  flashAt?: number
   onClose: () => void
   onUnbridge: () => void
   unbridgePending: boolean
   onCopy: (text: string, label?: string) => void
 }) {
-  const [tab, setTab] = useState<DetailTab>('overview')
+  const isButton = isButtonDevice(device)
+  const [tab, setTab] = useState<DetailTab>(isButton ? 'buttons' : 'overview')
   const groupInfo = dsGroupInfo(device.primaryGroup)
   const channelCount = Object.keys(getChannelStates(device)).length
   const sensorCount = Object.keys(getSensorStates(device)).length
+  const buttonCount = Object.keys(getButtonStates(device)).length
 
   const tabs: { id: DetailTab; label: string; count?: number }[] = [
     { id: 'overview', label: 'Overview' },
-    { id: 'channels', label: 'Channels', count: channelCount },
-    { id: 'sensors',  label: 'Sensors',  count: sensorCount },
+    ...(isButton ? [{ id: 'buttons' as DetailTab, label: 'Buttons', count: buttonCount }] : [
+      { id: 'channels' as DetailTab, label: 'Channels', count: channelCount },
+      { id: 'sensors'  as DetailTab, label: 'Sensors',  count: sensorCount },
+    ]),
     { id: 'metadata', label: 'Metadata' },
   ]
 
@@ -657,6 +776,13 @@ function ExpandedRow({
             />
           )}
 
+          {tab === 'buttons' && (
+            <ButtonsList
+              device={device}
+              flashAt={flashAt}
+            />
+          )}
+
           {tab === 'metadata' && (
             <div className="space-y-2">
               <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Raw properties</p>
@@ -721,6 +847,76 @@ function ChannelsList({
                   className="h-full rounded-full bg-emerald-500 transition-all duration-300"
                   style={{ width: `${pct}%` }}
                 />
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+// ── ButtonsList – expanded Buttons tab ───────────────────────────────────────
+
+function ButtonsList({ device, flashAt }: { device: Device; flashAt?: number }) {
+  const states = getButtonStates(device)
+  const descs  = getButtonDescs(device)
+  const keys   = Object.keys(states).sort()
+  const isFlashing = flashAt != null && (Date.now() - flashAt) < 2000
+
+  if (keys.length === 0) {
+    return (
+      <div className="space-y-2">
+        <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Buttons</p>
+        <p className="text-xs text-muted-foreground">No button state received yet. Press the physical button to see activity.</p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-2">
+      <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Buttons</p>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        {keys.map((k) => {
+          const st     = states[k]
+          const desc   = descs[k]
+          const action = st.action
+          const flash  = isFlashing && action != null
+
+          return (
+            <div
+              key={k}
+              className={`rounded-lg border p-3 flex items-center gap-3 transition-all duration-300 ${
+                flash
+                  ? 'border-violet-500/50 bg-violet-500/10'
+                  : 'border-border bg-background'
+              }`}
+            >
+              <span
+                className={`flex items-center justify-center h-8 w-8 rounded-md shrink-0 transition-all duration-300 ${
+                  flash
+                    ? 'bg-violet-500/30 text-violet-600 dark:text-violet-400'
+                    : 'bg-violet-500/10 text-violet-600/60 dark:text-violet-400/60'
+                }`}
+              >
+                <MousePointerClick className={`h-4 w-4 ${flash ? 'animate-bounce' : ''}`} />
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-baseline justify-between gap-2">
+                  <span className="text-xs text-muted-foreground">
+                    {desc?.name ?? `button ${k}`}
+                  </span>
+                  {action ? (
+                    <span className="text-sm font-semibold font-mono tabular-nums text-violet-700 dark:text-violet-300">
+                      {actionLabel(action)}
+                    </span>
+                  ) : (
+                    <span className="text-xs text-muted-foreground/50">—</span>
+                  )}
+                </div>
+                <div className="text-[10px] text-muted-foreground/60 mt-0.5">
+                  {action ? `last: ${action}` : 'waiting for press'}
+                </div>
               </div>
             </div>
           )

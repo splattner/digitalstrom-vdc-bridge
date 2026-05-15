@@ -53,6 +53,13 @@ func (c *Commander) SetChannelValue(uniqueID string, channelIndex int, value flo
 					"value":     value,
 					"error":     err.Error(),
 				})
+				c.registry.EmitPluginEvent(m.PluginID, LevelWarn, CodeApplyFailed,
+					"apply command failed", map[string]any{
+						"dsuid":   m.DSUID,
+						"channel": channelIndex,
+						"value":   value,
+						"error":   err.Error(),
+					})
 				return err
 			}
 			logging.Info("bridge_apply", logging.Fields{

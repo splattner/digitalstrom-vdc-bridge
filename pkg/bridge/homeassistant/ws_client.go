@@ -47,6 +47,7 @@ type wsClient struct {
 	onStateChange func(stateChange)
 	onStatus      func(string) // "connecting", "connected", "reconnecting", "auth_failed"
 	onRegistries  func(haRegistries)
+	onWarn        func(code, message string, fields map[string]any)
 
 	// runtime
 	mu        sync.RWMutex
@@ -200,6 +201,10 @@ func (c *wsClient) runOnce(ctx context.Context) error {
 			c.onRegistries(regs)
 		} else {
 			logging.Warn("ha_registries_failed", logging.Fields{"error": err.Error()})
+			if c.onWarn != nil {
+				c.onWarn("ha_registries_failed", "failed to fetch HA registries (areas/devices/entities)",
+					map[string]any{"error": err.Error()})
+			}
 		}
 	}
 

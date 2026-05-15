@@ -55,6 +55,9 @@ Add this repository to the Home Assistant add-on store:
 https://github.com/splattner/digitalstrom-vdc-bridge
 ```
 
+
+[![Open your Home Assistant instance and show the add app repository dialog with a specific repository URL pre-filled.](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fsplattner%2Fdigitalstrom-vdc-bridge)
+
 Then install **digitalSTROM vDC Bridge** from the add-on store. After starting the add-on, open its web UI via the **Open Web UI** button.
 
 > **Tip:** Enable ingress to access the UI directly from the HA sidebar.

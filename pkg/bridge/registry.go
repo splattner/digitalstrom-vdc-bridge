@@ -30,6 +30,7 @@ type Registry struct {
 	ctx       context.Context
 	notify    Notifier
 	persist   Persister
+	sink      EventSink
 }
 
 // SetNotifier installs a notifier callback. Safe to call before or after Start.
@@ -37,6 +38,45 @@ func (r *Registry) SetNotifier(n Notifier) {
 	r.mu.Lock()
 	r.notify = n
 	r.mu.Unlock()
+}
+
+// SetEventSink installs the EventSink that receives PluginEvents emitted by
+// plugins and registry lifecycle actions. Safe to call at any time.
+func (r *Registry) SetEventSink(s EventSink) {
+	r.mu.Lock()
+	r.sink = s
+	r.mu.Unlock()
+}
+
+// getSink returns the current EventSink under the read lock. Used as a closure
+// passed to pluginHost so that plugins always see the latest sink.
+func (r *Registry) getSink() EventSink {
+	r.mu.RLock()
+	s := r.sink
+	r.mu.RUnlock()
+	return s
+}
+
+// sinkEmit publishes a lifecycle PluginEvent to the EventSink (if set).
+func (r *Registry) sinkEmit(pluginID string, level LogLevel, code, message string, fields map[string]any) {
+	s := r.getSink()
+	if s == nil {
+		return
+	}
+	s.Publish(PluginEvent{
+		PluginID: pluginID,
+		Level:    level,
+		Code:     code,
+		Message:  message,
+		Fields:   fields,
+	})
+}
+
+// EmitPluginEvent publishes a PluginEvent on behalf of a plugin. Used by
+// helpers (e.g. the Commander) that have no direct access to a per-plugin
+// Host wrapper but still need to surface plugin-scoped log entries.
+func (r *Registry) EmitPluginEvent(pluginID string, level LogLevel, code, message string, fields map[string]any) {
+	r.sinkEmit(pluginID, level, code, message, fields)
 }
 
 func (r *Registry) emit(t string, data map[string]any) {
@@ -174,7 +214,10 @@ func (r *Registry) startPlugin(ctx context.Context, pc PluginConfig) error {
 	resolvedCfg := applyEnvOverlay(pc.ID, pc.Config)
 
 	p := entry.Factory(pc.ID)
-	if err := p.Init(ctx, resolvedCfg, r.host); err != nil {
+	// Wrap the shared host with a per-plugin facade that auto-tags Log events.
+	ph := &pluginHost{Host: r.host, pluginID: pc.ID, getSink: r.getSink}
+	if err := p.Init(ctx, resolvedCfg, ph); err != nil {
+		r.sinkEmit(pc.ID, LevelError, CodeConnectFailed, "plugin init failed", map[string]any{"error": err.Error(), "type": pc.Type})
 		return err
 	}
 
@@ -184,6 +227,7 @@ func (r *Registry) startPlugin(ctx context.Context, pc PluginConfig) error {
 	r.mu.Unlock()
 
 	logging.Info("bridge_plugin_started", logging.Fields{"id": pc.ID, "type": pc.Type})
+	r.sinkEmit(pc.ID, LevelInfo, CodePluginStarted, "plugin started", map[string]any{"type": pc.Type})
 	return nil
 }
 
@@ -204,6 +248,7 @@ func (r *Registry) AddPlugin(ctx context.Context, pc PluginConfig) error {
 	}
 	r.persistConfigs()
 	r.emit("pluginAdded", map[string]any{"id": pc.ID, "type": pc.Type})
+	r.sinkEmit(pc.ID, LevelInfo, CodePluginStarted, "plugin added", map[string]any{"type": pc.Type})
 	return nil
 }
 
@@ -230,6 +275,7 @@ func (r *Registry) RemovePlugin(ctx context.Context, id string) error {
 	}
 	r.persistConfigs()
 	r.emit("pluginRemoved", map[string]any{"id": id})
+	r.sinkEmit(id, LevelInfo, CodePluginStopped, "plugin removed", nil)
 	return nil
 }
 
@@ -263,6 +309,7 @@ func (r *Registry) UpdatePlugin(ctx context.Context, pc PluginConfig) error {
 	}
 	r.persistConfigs()
 	r.emit("pluginUpdated", map[string]any{"id": pc.ID, "type": pc.Type})
+	r.sinkEmit(pc.ID, LevelInfo, CodePluginRestarted, "plugin config updated and restarted", map[string]any{"type": pc.Type})
 	return nil
 }
 
@@ -357,6 +404,7 @@ func (r *Registry) CreateBridge(ctx context.Context, pluginID, remoteEntityID, n
 		"name":           m.Name,
 		"kind":           m.Kind,
 	})
+	r.sinkEmit(pluginID, LevelInfo, CodeEntityAdded, "bridge mapping created", map[string]any{"dsuid": dsuid, "remoteId": remoteEntityID, "name": name, "kind": kind})
 	return m, nil
 }
 
@@ -390,6 +438,7 @@ func (r *Registry) RemoveBridge(ctx context.Context, dsuid string) error {
 		"dsuid":    dsuid,
 		"name":     m.Name,
 	})
+	r.sinkEmit(m.PluginID, LevelInfo, CodeEntityRemoved, "bridge mapping removed", map[string]any{"dsuid": dsuid, "name": m.Name})
 	return nil
 }
 

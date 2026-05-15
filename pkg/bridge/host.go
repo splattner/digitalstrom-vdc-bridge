@@ -31,6 +31,11 @@ type Host interface {
 	// MQTT returns the shared MQTT broker manager. May be nil if the runtime
 	// has no MQTT support compiled in (in practice always present).
 	MQTT() *mqtt.Manager
+	// Log emits a structured diagnostic event for the plugin that holds this
+	// Host. The event is routed through the Registry's EventSink (if set) and
+	// forwarded to WebSocket subscribers / REST snapshots.
+	// Use the Code constants defined in plugin_event.go for well-known events.
+	Log(level LogLevel, code, message string, fields map[string]any)
 }
 
 // SensorDescriptor is re-exported from the runtime package for plugin use.
@@ -53,6 +58,10 @@ func NewHost(state *vdcapi.StateStore, mq *mqtt.Manager) Host {
 }
 
 func (h *hostImpl) MQTT() *mqtt.Manager { return h.mqtt }
+
+// Log is a no-op on the base hostImpl. Plugins receive a pluginHost wrapper
+// (created by the Registry) that overrides this with real event emission.
+func (h *hostImpl) Log(_ LogLevel, _, _ string, _ map[string]any) {}
 
 func (h *hostImpl) DeriveDSUID(pluginID, remoteEntityID string) string {
 	return vdcapi.BridgeDSUID(pluginID, remoteEntityID)

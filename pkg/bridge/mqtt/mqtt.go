@@ -66,6 +66,19 @@ func (p *Plugin) Init(ctx context.Context, cfg map[string]any, host bridge.Host)
 		p.manager.Register(p.id, b)
 	}
 
+	b.OnConnect(func() {
+		host.Log(bridge.LevelInfo, bridge.CodeConnectOK, "MQTT broker connected",
+			map[string]any{"host": c.host, "port": c.port})
+	})
+	b.OnDisconnect(func(err error) {
+		host.Log(bridge.LevelWarn, bridge.CodeConnectFailed, "MQTT broker disconnected",
+			map[string]any{"host": c.host, "error": err.Error()})
+	})
+	b.OnConnectError(func(err error) {
+		host.Log(bridge.LevelError, bridge.CodeConnectFailed, "MQTT initial connect failed",
+			map[string]any{"host": c.host, "port": c.port, "error": err.Error()})
+	})
+
 	go b.run(ctx)
 	logging.Info("mqtt_plugin_started", logging.Fields{
 		"id":     p.id,
@@ -122,6 +135,7 @@ type brokerImpl struct {
 	subs         map[*subscriptionImpl]struct{}
 	onConnect    []func()
 	onDisconnect []func(error)
+	onConnectErr []func(error)
 
 	cancel context.CancelFunc
 }
@@ -233,12 +247,15 @@ func (b *brokerImpl) run(ctx context.Context) {
 	// Don't block forever — paho will keep retrying via SetConnectRetry.
 	go func() {
 		if !tok.WaitTimeout(30 * time.Second) {
-			b.setStatus("connecting", errors.New("initial connect timeout"))
+			err := errors.New("initial connect timeout")
+			b.setStatus("connecting", err)
+			b.fireConnectError(err)
 			return
 		}
 		if err := tok.Error(); err != nil {
 			b.setStatus("auth_failed", err)
 			logging.Warn("mqtt_connect_error", logging.Fields{"id": b.id, "error": err.Error()})
+			b.fireConnectError(err)
 		}
 	}()
 
@@ -348,6 +365,27 @@ func (b *brokerImpl) OnDisconnect(cb func(error)) {
 	b.mu.Lock()
 	b.onDisconnect = append(b.onDisconnect, cb)
 	b.mu.Unlock()
+}
+
+// OnConnectError registers a callback fired when the initial connect attempt
+// times out or the broker rejects the credentials. Unlike OnDisconnect this
+// does NOT fire on every later transient reconnect.
+func (b *brokerImpl) OnConnectError(cb func(error)) {
+	if cb == nil {
+		return
+	}
+	b.mu.Lock()
+	b.onConnectErr = append(b.onConnectErr, cb)
+	b.mu.Unlock()
+}
+
+func (b *brokerImpl) fireConnectError(err error) {
+	b.mu.RLock()
+	cbs := append([]func(error){}, b.onConnectErr...)
+	b.mu.RUnlock()
+	for _, cb := range cbs {
+		go cb(err)
+	}
 }
 
 // subscriptionImpl is one active topic subscription.

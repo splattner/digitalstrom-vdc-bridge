@@ -299,6 +299,8 @@ func (p *Plugin) onDiscovery(ctx context.Context, topic string, payload []byte) 
 		logging.Warn("tasmota_discovery_parse", logging.Fields{
 			"topic": topic, "error": err.Error(),
 		})
+		p.host.Log(bridge.LevelWarn, bridge.CodeEntityError, "failed to parse Tasmota discovery payload",
+			map[string]any{"topic": topic, "error": err.Error()})
 		return
 	}
 	if c.MAC == "" {
@@ -322,6 +324,8 @@ func (p *Plugin) onDiscovery(ctx context.Context, topic string, payload []byte) 
 		logging.Info("tasmota_device_discovered", logging.Fields{
 			"mac": c.MAC, "model": c.Model, "topic": c.Topic, "relays": c.relayCount(),
 		})
+		p.host.Log(bridge.LevelInfo, bridge.CodeEntityAdded, "Tasmota device discovered",
+			map[string]any{"mac": c.MAC, "model": c.Model, "topic": c.Topic, "relays": c.relayCount()})
 	}
 	for _, sub := range pending {
 		p.activate(sub, dev)
@@ -347,6 +351,8 @@ func (p *Plugin) activate(sub *deviceSub, dev *discoveredDevice) {
 		subs = append(subs, s)
 	} else {
 		logging.Warn("tasmota_lwt_subscribe", logging.Fields{"topic": lwtTopic, "error": err.Error()})
+		p.host.Log(bridge.LevelWarn, bridge.CodeSubscribeFailed, "failed to subscribe to Tasmota LWT topic",
+			map[string]any{"dsuid": sub.mapping.DSUID, "topic": lwtTopic, "error": err.Error()})
 	}
 
 	stateHandler := func(_ string, payload []byte, _ bool) {
@@ -387,6 +393,8 @@ func (p *Plugin) activate(sub *deviceSub, dev *discoveredDevice) {
 		"mac":   sub.mac,
 		"relay": sub.relay,
 	})
+	p.host.Log(bridge.LevelInfo, bridge.CodeSubscribeOK, "device subscribed",
+		map[string]any{"dsuid": sub.mapping.DSUID, "mac": sub.mac, "relay": sub.relay})
 }
 
 // applyState pushes channel updates derived from a STATE / RESULT payload.

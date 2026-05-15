@@ -182,6 +182,11 @@ func NewService(cfg Config) (*Service, error) {
 		})
 	}
 
+	// Create the ring-buffer that collects per-plugin structured events and
+	// wire it into the registry before any plugins are started.
+	eventBuf := bridge.NewEventBuffer(500, 2000)
+	bridgeRegistry.SetEventSink(eventBuf)
+
 	// Create the service skeleton so closures below can capture it.
 	svc := &Service{srv: srv, cfg: cfg, state: state, scenes: scenes, config: configStore, bridges: bridgeRegistry}
 
@@ -219,6 +224,7 @@ func NewService(cfg Config) (*Service, error) {
 			Config:      configStore,
 			Scenes:      scenes,
 			Bridges:     bridgeRegistry,
+			EventBuffer: eventBuf,
 			VdcAPIPort:  cfg.VdcAPIPort,
 			EnableDNSSD: cfg.EnableDNSSD,
 			NonLocal:    cfg.NonLocal,

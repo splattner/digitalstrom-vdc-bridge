@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -501,4 +502,97 @@ func parseEntityID(id string) (ieee, endpointName string) {
 		return id[:i], id[i+1:]
 	}
 	return id, ""
+}
+
+// ── z2m group types ───────────────────────────────────────────────────────────
+
+const groupEntityPrefix = "z2m-group-"
+
+// bridgeGroup mirrors one entry in the <base>/bridge/groups retained array.
+type bridgeGroup struct {
+	ID           int           `json:"id"`
+	FriendlyName string        `json:"friendly_name"`
+	Members      []groupMember `json:"members"`
+}
+
+// groupMember identifies one device endpoint that belongs to a group.
+type groupMember struct {
+	IEEE     string `json:"ieee_address"`
+	Endpoint int    `json:"endpoint"`
+}
+
+// entityID returns the stable vDC remote entity id for this group.
+// We use the numeric z2m group id (which is stable across renames) rather than
+// the friendly_name (which can change and would invalidate existing mappings).
+func (g *bridgeGroup) entityID() string {
+	return groupEntityPrefix + strconv.Itoa(g.ID)
+}
+
+// displayName returns a human-readable name for UI display.
+func (g *bridgeGroup) displayName() string {
+	if g.FriendlyName != "" {
+		return g.FriendlyName
+	}
+	return g.entityID()
+}
+
+// stateTopic returns "<base>/<friendly_name>" — same pattern as devices.
+func (g *bridgeGroup) stateTopic(base string) string {
+	return base + "/" + g.FriendlyName
+}
+
+// setTopic returns "<base>/<friendly_name>/set".
+func (g *bridgeGroup) setTopic(base string) string {
+	return base + "/" + g.FriendlyName + "/set"
+}
+
+// inferEndpoint determines the light endpoint capability for this group by
+// inspecting the already-known member devices. The rule is:
+//   - If any member has a colorlight endpoint  → colorlight
+//   - If any member has a dimmer endpoint       → dimmer
+//   - Otherwise (binary light or unknown)       → light
+//
+// Defaults to "dimmer" when no members are known yet. The endpoint always uses
+// the standard property names ("state", "brightness", "color") because z2m
+// groups present a single unified state regardless of per-device endpoint names.
+func (g *bridgeGroup) inferEndpoint(devices map[string]*discoveredDevice) endpoint {
+	best := "light"
+	for _, m := range g.Members {
+		dd, ok := devices[m.IEEE]
+		if !ok {
+			continue
+		}
+		for _, ep := range dd.endpoints {
+			switch ep.Kind {
+			case "colorlight":
+				best = "colorlight"
+			case "dimmer":
+				if best != "colorlight" {
+					best = "dimmer"
+				}
+			}
+		}
+	}
+	if best == "light" && len(g.Members) == 0 {
+		best = "dimmer" // optimistic default for empty groups
+	}
+	ep := endpoint{
+		Name:      "",
+		Kind:      best,
+		StateProp: "state",
+	}
+	if best == "dimmer" || best == "colorlight" {
+		ep.HasBrightness = true
+		ep.BrightnessProp = "brightness"
+	}
+	if best == "colorlight" {
+		ep.HasColor = true
+		ep.ColorProp = "color"
+	}
+	return ep
+}
+
+// isGroupEntityID returns true if id is a z2m group entity id.
+func isGroupEntityID(id string) bool {
+	return strings.HasPrefix(id, groupEntityPrefix)
 }

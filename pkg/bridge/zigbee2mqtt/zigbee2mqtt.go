@@ -25,6 +25,7 @@ func Factory() bridge.Factory {
 		return &Plugin{
 			id:         id,
 			devices:    make(map[string]*discoveredDevice),
+			groups:     make(map[string]*discoveredGroup),
 			subscribed: make(map[string]*deviceSub),
 		}
 	}
@@ -38,12 +39,22 @@ type Plugin struct {
 	cfg    config
 
 	devicesSub mqttsvc.Subscription
+	groupsSub  mqttsvc.Subscription
 
 	mu sync.Mutex
 	// devices keyed by IEEE address
 	devices map[string]*discoveredDevice
+	// groups keyed by group entity id ("z2m-group-<id>")
+	groups map[string]*discoveredGroup
 	// subscribed keyed by mapping DSUID
 	subscribed map[string]*deviceSub
+}
+
+// discoveredGroup holds a parsed z2m group together with the light endpoint
+// capability inferred from its members.
+type discoveredGroup struct {
+	grp      bridgeGroup
+	endpoint endpoint
 }
 
 type discoveredDevice struct {
@@ -71,6 +82,10 @@ type deviceSub struct {
 	mapping bridge.Mapping
 	ieee    string
 	epName  string
+	// isGroup is true when this subscription is for a z2m group.
+	// groupID holds the group entity id ("z2m-group-<id>") in that case.
+	isGroup bool
+	groupID string
 	subs    []mqttsvc.Subscription
 	// cached HSV used to merge single-axis hue/sat updates.
 	hue float64
@@ -99,10 +114,10 @@ func (p *Plugin) Status() string {
 func (p *Plugin) Stats() bridge.PluginStats {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return bridge.PluginStats{Discovered: len(p.devices), Active: len(p.subscribed)}
+	return bridge.PluginStats{Discovered: len(p.devices) + len(p.groups), Active: len(p.subscribed)}
 }
 
-// Init resolves the broker and subscribes to <base>/bridge/devices.
+// Init resolves the broker and subscribes to <base>/bridge/devices and <base>/bridge/groups.
 func (p *Plugin) Init(ctx context.Context, raw map[string]any, host bridge.Host) error {
 	c, err := parseConfig(raw)
 	if err != nil {
@@ -130,6 +145,17 @@ func (p *Plugin) Init(ctx context.Context, raw map[string]any, host bridge.Host)
 	}
 	p.devicesSub = sub
 
+	gtopic := c.baseTopic + "/bridge/groups"
+	gsub, err := b.Subscribe(gtopic, 0, func(_ string, payload []byte, _ bool) {
+		p.onGroups(ctx, payload)
+	})
+	if err != nil {
+		// groups subscription is optional — log but don't fail
+		logging.Warn("zigbee2mqtt_groups_subscribe", logging.Fields{"topic": gtopic, "error": err.Error()})
+	} else {
+		p.groupsSub = gsub
+	}
+
 	logging.Info("zigbee2mqtt_plugin_started", logging.Fields{
 		"id":     p.id,
 		"broker": c.broker,
@@ -138,11 +164,11 @@ func (p *Plugin) Init(ctx context.Context, raw map[string]any, host bridge.Host)
 	return nil
 }
 
-// Discover returns one entity per bridgeable endpoint of every known device.
+// Discover returns one entity per bridgeable endpoint of every known device and group.
 func (p *Plugin) Discover(_ context.Context) ([]bridge.RemoteEntity, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	out := make([]bridge.RemoteEntity, 0, len(p.devices))
+	out := make([]bridge.RemoteEntity, 0, len(p.devices)+len(p.groups))
 	for _, d := range p.devices {
 		for _, ep := range d.endpoints {
 			attrs := map[string]any{
@@ -167,11 +193,47 @@ func (p *Plugin) Discover(_ context.Context) ([]bridge.RemoteEntity, error) {
 			})
 		}
 	}
+	for _, dg := range p.groups {
+		out = append(out, bridge.RemoteEntity{
+			ID:   dg.grp.entityID(),
+			Name: dg.grp.displayName(),
+			Kind: dg.endpoint.Kind,
+			Attributes: map[string]any{
+				"friendly": dg.grp.FriendlyName,
+				"group_id": dg.grp.ID,
+				"members":  len(dg.grp.Members),
+				"type":     "group",
+			},
+		})
+	}
 	return out, nil
 }
 
-// Subscribe records the mapping and (if device is known) installs state subs.
+// Subscribe records the mapping and (if device/group is known) installs state subs.
 func (p *Plugin) Subscribe(_ context.Context, m bridge.Mapping) error {
+	if isGroupEntityID(m.RemoteEntityID) {
+		sub := &deviceSub{
+			mapping:    m,
+			isGroup:    true,
+			groupID:    m.RemoteEntityID,
+			held:       make(map[int]bool),
+			holdTimers: make(map[int]*time.Timer),
+		}
+		p.mu.Lock()
+		p.subscribed[m.DSUID] = sub
+		dg := p.groups[m.RemoteEntityID]
+		p.mu.Unlock()
+		if dg != nil {
+			p.activateGroup(sub, dg)
+		} else {
+			logging.Info("zigbee2mqtt_subscribe_group_pending", logging.Fields{
+				"dsuid":    m.DSUID,
+				"group_id": m.RemoteEntityID,
+			})
+		}
+		return nil
+	}
+
 	ieee, epName := parseEntityID(m.RemoteEntityID)
 	sub := &deviceSub{
 		mapping:    m,
@@ -214,12 +276,27 @@ func (p *Plugin) Unsubscribe(_ context.Context, dsuid string) error {
 func (p *Plugin) Apply(ctx context.Context, m bridge.Mapping, cmd bridge.Command) error {
 	p.mu.Lock()
 	sub, ok := p.subscribed[m.DSUID]
-	dev := p.devices[sub.ieee]
 	p.mu.Unlock()
 
 	if !ok {
 		return fmt.Errorf("zigbee2mqtt: not subscribed: %s", m.DSUID)
 	}
+
+	// Groups: look up discoveredGroup.
+	if sub.isGroup {
+		p.mu.Lock()
+		dg := p.groups[sub.groupID]
+		p.mu.Unlock()
+		if dg == nil {
+			return fmt.Errorf("zigbee2mqtt: group %q not yet discovered", sub.groupID)
+		}
+		return p.applyToEndpoint(ctx, sub, dg.endpoint, dg.grp.setTopic(p.cfg.baseTopic), cmd)
+	}
+
+	// Devices: original path.
+	p.mu.Lock()
+	dev := p.devices[sub.ieee]
+	p.mu.Unlock()
 	if dev == nil {
 		return fmt.Errorf("zigbee2mqtt: device %q not yet discovered", sub.ieee)
 	}
@@ -227,7 +304,11 @@ func (p *Plugin) Apply(ctx context.Context, m bridge.Mapping, cmd bridge.Command
 	if !ok {
 		return fmt.Errorf("zigbee2mqtt: endpoint %q not found on %s", sub.epName, sub.ieee)
 	}
+	return p.applyToEndpoint(ctx, sub, ep, dev.dev.setTopic(p.cfg.baseTopic), cmd)
+}
 
+// applyToEndpoint builds and publishes a set-payload for the given endpoint.
+func (p *Plugin) applyToEndpoint(ctx context.Context, sub *deviceSub, ep endpoint, setTopic string, cmd bridge.Command) error {
 	payload := map[string]any{}
 
 	switch cmd.Type {
@@ -275,13 +356,16 @@ func (p *Plugin) Apply(ctx context.Context, m bridge.Mapping, cmd bridge.Command
 	if err != nil {
 		return err
 	}
-	return p.publish(ctx, dev.dev.setTopic(p.cfg.baseTopic), body)
+	return p.publish(ctx, setTopic, body)
 }
 
 // Close tears down all subscriptions.
 func (p *Plugin) Close() error {
 	if p.devicesSub != nil {
 		_ = p.devicesSub.Close()
+	}
+	if p.groupsSub != nil {
+		_ = p.groupsSub.Close()
 	}
 	p.mu.Lock()
 	subs := p.subscribed
@@ -356,6 +440,63 @@ func (p *Plugin) onDevices(_ context.Context, payload []byte) {
 		dev := p.devices[sub.ieee]
 		if dev != nil {
 			p.activate(sub, dev)
+		}
+	}
+}
+
+// onGroups handles the retained <base>/bridge/groups array.
+func (p *Plugin) onGroups(_ context.Context, payload []byte) {
+	if len(payload) == 0 {
+		return
+	}
+	var arr []bridgeGroup
+	if err := json.Unmarshal(payload, &arr); err != nil {
+		logging.Warn("zigbee2mqtt_groups_parse", logging.Fields{"error": err.Error()})
+		p.host.Log(bridge.LevelWarn, bridge.CodeEntityError, "failed to parse zigbee2mqtt groups payload",
+			map[string]any{"error": err.Error()})
+		return
+	}
+	seen := make(map[string]struct{}, len(arr))
+	pending := []*deviceSub{}
+	added := 0
+
+	p.mu.Lock()
+	for i := range arr {
+		g := arr[i]
+		eid := g.entityID()
+		seen[eid] = struct{}{}
+		if _, existed := p.groups[eid]; !existed {
+			added++
+		}
+		ep := g.inferEndpoint(p.devices)
+		p.groups[eid] = &discoveredGroup{grp: g, endpoint: ep}
+		for _, sub := range p.subscribed {
+			if sub.isGroup && sub.groupID == eid && len(sub.subs) == 0 {
+				pending = append(pending, sub)
+			}
+		}
+	}
+	// Drop groups that disappeared from the list.
+	for eid := range p.groups {
+		if _, ok := seen[eid]; !ok {
+			delete(p.groups, eid)
+		}
+	}
+	p.mu.Unlock()
+
+	if added > 0 {
+		logging.Info("zigbee2mqtt_groups_updated", logging.Fields{
+			"added": added, "total": len(seen),
+		})
+		p.host.Log(bridge.LevelInfo, bridge.CodeEntityAdded, "discovered groups updated",
+			map[string]any{"added": added, "total": len(seen)})
+	}
+	for _, sub := range pending {
+		p.mu.Lock()
+		dg := p.groups[sub.groupID]
+		p.mu.Unlock()
+		if dg != nil {
+			p.activateGroup(sub, dg)
 		}
 	}
 }
@@ -452,6 +593,87 @@ func (p *Plugin) activate(sub *deviceSub, dev *discoveredDevice) {
 	})
 	p.host.Log(bridge.LevelInfo, bridge.CodeSubscribeOK, "device subscribed",
 		map[string]any{"dsuid": sub.mapping.DSUID, "ieee": sub.ieee, "endpoint": sub.epName})
+}
+
+// activateGroup subscribes to a z2m group's state topic.
+// Groups have no availability topic in z2m (as of 1.x/2.x).
+func (p *Plugin) activateGroup(sub *deviceSub, dg *discoveredGroup) {
+	base := p.cfg.baseTopic
+	stateTopic := dg.grp.stateTopic(base)
+
+	s, err := p.broker.Subscribe(stateTopic, 0, func(_ string, payload []byte, retained bool) {
+		var msg stateMessage
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			logging.Debug("zigbee2mqtt_group_state_unmarshal_error", logging.Fields{
+				"topic": stateTopic, "error": err.Error(),
+			})
+			return
+		}
+		// Re-fetch endpoint snapshot in case groups were updated in the meantime.
+		p.mu.Lock()
+		latest := p.groups[sub.groupID]
+		p.mu.Unlock()
+		if latest == nil {
+			return
+		}
+		p.applyGroupState(sub, latest.endpoint, msg, retained)
+	})
+	if err != nil {
+		logging.Warn("zigbee2mqtt_group_state_subscribe", logging.Fields{
+			"topic": stateTopic, "error": err.Error(),
+		})
+		p.host.Log(bridge.LevelWarn, bridge.CodeSubscribeFailed, "failed to subscribe to zigbee2mqtt group state topic",
+			map[string]any{"dsuid": sub.mapping.DSUID, "group_id": sub.groupID, "topic": stateTopic, "error": err.Error()})
+		return
+	}
+
+	p.mu.Lock()
+	sub.subs = []mqttsvc.Subscription{s}
+	p.mu.Unlock()
+
+	logging.Info("zigbee2mqtt_group_subscribed", logging.Fields{
+		"dsuid":    sub.mapping.DSUID,
+		"group_id": sub.groupID,
+		"topic":    stateTopic,
+	})
+	p.host.Log(bridge.LevelInfo, bridge.CodeSubscribeOK, "group subscribed",
+		map[string]any{"dsuid": sub.mapping.DSUID, "group_id": sub.groupID})
+}
+
+// applyGroupState updates the channel state for a group subscription.
+func (p *Plugin) applyGroupState(sub *deviceSub, ep endpoint, msg stateMessage, _ bool) {
+	ctx := context.Background()
+
+	on := true
+	if s, ok := msg.stringField(ep.StateProp); ok {
+		on = stateOn(s)
+		if !on {
+			_ = p.host.UpdateChannel(ctx, sub.mapping.DSUID, 0, 0)
+		} else if !ep.HasBrightness {
+			_ = p.host.UpdateChannel(ctx, sub.mapping.DSUID, 0, 100)
+		}
+	}
+
+	if ep.HasBrightness {
+		if bri, ok := msg.numberField(ep.BrightnessProp); ok {
+			_ = p.host.UpdateChannel(ctx, sub.mapping.DSUID, 0, briToVDC(bri, on))
+		}
+	}
+
+	if ep.HasColor {
+		if c := msg.colorField(ep.ColorProp); c != nil {
+			h, hOK := c["hue"].(float64)
+			s, sOK := c["saturation"].(float64)
+			if hOK && sOK {
+				p.mu.Lock()
+				sub.hue = h
+				sub.sat = s
+				p.mu.Unlock()
+				_ = p.host.UpdateChannel(ctx, sub.mapping.DSUID, 1, h)
+				_ = p.host.UpdateChannel(ctx, sub.mapping.DSUID, 2, s)
+			}
+		}
+	}
 }
 
 // applyState forwards a state JSON to the host's channel/active state.

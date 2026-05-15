@@ -918,10 +918,15 @@ func primaryGroupForKind(kind string) int {
 	case "dimmer", "colorlight", "movinglight":
 		return 1 // class_yellow_light
 	case "button":
-		// Buttons are by default placed in the yellow/light group so that a
-		// press routes to the room's light scenes (matches a stock SW-TKM200).
-		// The buttonInputSettings.group can still be retargeted from dSS to
-		// move the button to a different colour group.
+		// Buttons default to the yellow/light group so they trigger room light
+		// scenes out of the box (matches a stock SW-TKM200 base).
+		//
+		// NOTE: dSS only exposes a colour-group picker for joker-class (8)
+		// devices. Switching to joker, however, currently breaks the proxy
+		// rendering of the device (empty buttonInputs / groups), so we keep
+		// the device on yellow class and let users retarget the group via the
+		// bridge's own UI / config (buttonInputSettings.group override in
+		// ConfigStore).
 		return 1 // class_yellow_light
 	case "shadow":
 		return 2 // class_grey_shadow

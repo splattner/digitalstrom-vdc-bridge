@@ -3,6 +3,7 @@ package httpapi
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -58,4 +59,45 @@ func (s *Server) handleDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, dev)
+}
+
+// handleSetButtonGroup persists the dS color group for a single button input.
+// Body: {"group": <int>}. The new value is reflected in the device JSON
+// immediately; dSS picks it up on its next property read (typically on
+// re-announce — use "Forget vDSM" on the Settings page to force one).
+func (s *Server) handleSetButtonGroup(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.Config == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "config store not available"})
+		return
+	}
+	dsuid := chi.URLParam(r, "dsuid")
+	idxStr := chi.URLParam(r, "idx")
+	idx, err := strconv.Atoi(idxStr)
+	if err != nil || idx < 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid button index"})
+		return
+	}
+	var body struct {
+		Group int `json:"group"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid body: " + err.Error()})
+		return
+	}
+	if body.Group < 0 || body.Group > 63 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "group out of range"})
+		return
+	}
+	s.cfg.Config.SetButtonGroup(dsuid, idx, body.Group)
+	s.NotifyChange(dsuid, map[string]any{
+		"buttonInputSettings": map[string]any{
+			strconv.Itoa(idx): map[string]any{"group": body.Group},
+		},
+	})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":    true,
+		"dsuid": dsuid,
+		"idx":   idx,
+		"group": body.Group,
+	})
 }

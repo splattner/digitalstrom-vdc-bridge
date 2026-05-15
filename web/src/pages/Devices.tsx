@@ -67,6 +67,13 @@ function getButtonDescs(d: Device): Record<string, ButtonDesc> {
   return {}
 }
 
+interface ButtonSettings { group?: number; mode?: number; function?: number; setsLocalPriority?: boolean; callsPresent?: boolean }
+function getButtonSettings(d: Device): Record<string, ButtonSettings> {
+  const s = d.buttonInputSettings
+  if (s && typeof s === 'object' && !Array.isArray(s)) return s as Record<string, ButtonSettings>
+  return {}
+}
+
 function isButtonDevice(d: Device): boolean {
   return String(d.outputType ?? '').toLowerCase() === 'button'
 }
@@ -858,11 +865,42 @@ function ChannelsList({
 
 // ── ButtonsList – expanded Buttons tab ───────────────────────────────────────
 
+// Subset of dS color groups that make sense to assign to a button input.
+// Values mirror p44vdc/vdc_common/dsdefs.h (DsGroup enum).
+const BUTTON_GROUP_OPTIONS: { value: number; label: string }[] = [
+  { value: 1,  label: '1 · yellow / light' },
+  { value: 2,  label: '2 · grey / shadow' },
+  { value: 3,  label: '3 · blue / heating' },
+  { value: 4,  label: '4 · cyan / audio' },
+  { value: 5,  label: '5 · magenta / video' },
+  { value: 6,  label: '6 · red / security' },
+  { value: 7,  label: '7 · green / access' },
+  { value: 8,  label: '8 · black / joker' },
+  { value: 9,  label: '9 · cooling' },
+  { value: 10, label: '10 · ventilation' },
+  { value: 11, label: '11 · windows' },
+  { value: 48, label: '48 · room temp. control' },
+]
+
 function ButtonsList({ device, flashAt }: { device: Device; flashAt?: number }) {
-  const states = getButtonStates(device)
-  const descs  = getButtonDescs(device)
-  const keys   = Object.keys(states).sort()
+  const qc = useQueryClient()
+  const pushToast = useToasts((s) => s.push)
+  const states   = getButtonStates(device)
+  const descs    = getButtonDescs(device)
+  const settings = getButtonSettings(device)
+  const keys     = Object.keys(states).sort()
   const isFlashing = flashAt != null && (Date.now() - flashAt) < 2000
+
+  const groupMut = useMutation({
+    mutationFn: ({ idx, group }: { idx: number; group: number }) =>
+      api.setButtonGroup(device.dSUID, idx, group),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['devices'] })
+      void qc.invalidateQueries({ queryKey: ['device', device.dSUID] })
+      pushToast('Group updated. dSS picks it up on next re-announce (Settings → Forget vDSM).', 'success')
+    },
+    onError: (e: unknown) => pushToast(`Update failed: ${e instanceof Error ? e.message : String(e)}`, 'error'),
+  })
 
   if (keys.length === 0) {
     return (
@@ -882,46 +920,76 @@ function ButtonsList({ device, flashAt }: { device: Device; flashAt?: number }) 
           const desc   = descs[k]
           const action = st.action
           const flash  = isFlashing && action != null
+          const idxNum = Number(k)
+          const curGroup = settings[k]?.group ?? 1
+          const gInfo = dsGroupInfo(curGroup)
 
           return (
             <div
               key={k}
-              className={`rounded-lg border p-3 flex items-center gap-3 transition-all duration-300 ${
+              className={`rounded-lg border p-3 flex flex-col gap-2 transition-all duration-300 ${
                 flash
                   ? 'border-violet-500/50 bg-violet-500/10'
                   : 'border-border bg-background'
               }`}
             >
-              <span
-                className={`flex items-center justify-center h-8 w-8 rounded-md shrink-0 transition-all duration-300 ${
-                  flash
-                    ? 'bg-violet-500/30 text-violet-600 dark:text-violet-400'
-                    : 'bg-violet-500/10 text-violet-600/60 dark:text-violet-400/60'
-                }`}
-              >
-                <MousePointerClick className={`h-4 w-4 ${flash ? 'animate-bounce' : ''}`} />
-              </span>
-              <div className="min-w-0 flex-1">
-                <div className="flex items-baseline justify-between gap-2">
-                  <span className="text-xs text-muted-foreground">
-                    {desc?.name ?? `button ${k}`}
-                  </span>
-                  {action ? (
-                    <span className="text-sm font-semibold font-mono tabular-nums text-violet-700 dark:text-violet-300">
-                      {actionLabel(action)}
+              <div className="flex items-center gap-3">
+                <span
+                  className={`flex items-center justify-center h-8 w-8 rounded-md shrink-0 transition-all duration-300 ${
+                    flash
+                      ? 'bg-violet-500/30 text-violet-600 dark:text-violet-400'
+                      : 'bg-violet-500/10 text-violet-600/60 dark:text-violet-400/60'
+                  }`}
+                >
+                  <MousePointerClick className={`h-4 w-4 ${flash ? 'animate-bounce' : ''}`} />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-baseline justify-between gap-2">
+                    <span className="text-xs text-muted-foreground">
+                      {desc?.name ?? `button ${k}`}
                     </span>
-                  ) : (
-                    <span className="text-xs text-muted-foreground/50">—</span>
+                    {action ? (
+                      <span className="text-sm font-semibold font-mono tabular-nums text-violet-700 dark:text-violet-300">
+                        {actionLabel(action)}
+                      </span>
+                    ) : (
+                      <span className="text-xs text-muted-foreground/50">—</span>
+                    )}
+                  </div>
+                  <div className="text-[10px] text-muted-foreground/60 mt-0.5">
+                    {action ? `last: ${action}` : 'waiting for press'}
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 pt-1 border-t border-border/50">
+                <span className="text-[11px] text-muted-foreground shrink-0">Color group</span>
+                <span
+                  className="inline-block h-2 w-2 rounded-full ring-1 ring-black/10 dark:ring-white/10 shrink-0"
+                  style={{ backgroundColor: gInfo.color }}
+                  title={gInfo.name}
+                />
+                <select
+                  className="flex-1 min-w-0 h-7 rounded border bg-background px-1 text-xs font-mono"
+                  value={curGroup}
+                  disabled={groupMut.isPending}
+                  onChange={(e) => groupMut.mutate({ idx: idxNum, group: Number(e.target.value) })}
+                >
+                  {BUTTON_GROUP_OPTIONS.map((o) => (
+                    <option key={o.value} value={o.value}>{o.label}</option>
+                  ))}
+                  {/* Always render the current value if it isn't in the canonical list. */}
+                  {!BUTTON_GROUP_OPTIONS.some((o) => o.value === curGroup) && (
+                    <option value={curGroup}>group {curGroup}</option>
                   )}
-                </div>
-                <div className="text-[10px] text-muted-foreground/60 mt-0.5">
-                  {action ? `last: ${action}` : 'waiting for press'}
-                </div>
+                </select>
               </div>
             </div>
           )
         })}
       </div>
+      <p className="text-[11px] text-muted-foreground/70 pt-1">
+        Determines which dS scene group the button calls (e.g. lights vs. shades). Takes effect on the next dSS re-announce.
+      </p>
     </div>
   )
 }

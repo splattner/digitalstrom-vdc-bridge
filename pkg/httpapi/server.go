@@ -191,6 +191,7 @@ func (s *Server) buildRouter() chi.Router {
 	r.Get("/api/dss", s.handleDSS)
 	r.Get("/api/devices", s.handleDevices)
 	r.Get("/api/devices/{dsuid}", s.handleDevice)
+	r.Put("/api/devices/{dsuid}/buttons/{idx}/group", s.handleSetButtonGroup)
 	r.Get("/api/events", s.handleEvents)
 	r.Get("/api/debug/pbuf", s.handleDebugPbuf)
 

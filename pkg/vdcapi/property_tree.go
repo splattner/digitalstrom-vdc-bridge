@@ -917,6 +917,12 @@ func primaryGroupForKind(kind string) int {
 	switch kind {
 	case "dimmer", "colorlight", "movinglight":
 		return 1 // class_yellow_light
+	case "button":
+		// Buttons are by default placed in the yellow/light group so that a
+		// press routes to the room's light scenes (matches a stock SW-TKM200).
+		// The buttonInputSettings.group can still be retargeted from dSS to
+		// move the button to a different colour group.
+		return 1 // class_yellow_light
 	case "shadow":
 		return 2 // class_grey_shadow
 	case "climate":

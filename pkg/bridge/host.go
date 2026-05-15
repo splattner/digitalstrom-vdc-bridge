@@ -20,6 +20,16 @@ type Host interface {
 	RemoveDevice(ctx context.Context, dsuid string) error
 	// UpdateChannel pushes a channel value update for a device.
 	UpdateChannel(ctx context.Context, dsuid string, channelIndex int, value float64) error
+	// UpdateButton pushes a raw button input state change (1=pressed, 0=released).
+	// Bridge plugins that receive only pre-aggregated click events (HA, Z2M) may
+	// pulse this 1→0 around a SetButtonAction call so that observers see the
+	// button as briefly active.
+	UpdateButton(ctx context.Context, dsuid string, buttonIndex int, value float64) error
+	// SetButtonAction publishes a digitalSTROM-style click type
+	// ("tip", "tip2", "tip3", "tip4", "hold") for a button input. This is the
+	// preferred entry point for bridges that already receive aggregated button
+	// events (HA event entities, Z2M action enum values).
+	SetButtonAction(ctx context.Context, dsuid string, buttonIndex int, action string) error
 	// UpdateSensor pushes a sensor input value update for a device.
 	UpdateSensor(ctx context.Context, dsuid string, sensorIndex int, value float64) error
 	// SetSensorDescriptor publishes metadata (type, range, unit) for a sensor input.
@@ -95,6 +105,26 @@ func (h *hostImpl) UpdateChannel(_ context.Context, dsuid string, channelIndex i
 	return nil
 }
 
+func (h *hostImpl) UpdateButton(_ context.Context, dsuid string, buttonIndex int, value float64) error {
+	h.state.HandleEvent(runtime.Event{
+		Type:     runtime.EventButton,
+		UniqueID: dsuid,
+		Index:    buttonIndex,
+		Value:    value,
+	})
+	return nil
+}
+
+func (h *hostImpl) SetButtonAction(_ context.Context, dsuid string, buttonIndex int, action string) error {
+	h.state.HandleEvent(runtime.Event{
+		Type:     runtime.EventButtonAction,
+		UniqueID: dsuid,
+		Index:    buttonIndex,
+		Action:   action,
+	})
+	return nil
+}
+
 func (h *hostImpl) UpdateSensor(_ context.Context, dsuid string, sensorIndex int, value float64) error {
 	h.state.HandleEvent(runtime.Event{
 		Type:     runtime.EventSensor,
@@ -138,6 +168,8 @@ func kindToOutput(kind string) string {
 		return "sensor"
 	case "binary":
 		return "binaryInput"
+	case "button":
+		return "button"
 	default:
 		if kind == "" {
 			return "light"

@@ -61,12 +61,21 @@ type Plugin struct {
 // ID returns the configured instance id.
 func (p *Plugin) ID() string { return p.id }
 
-// Status returns a short status string.
+// Status returns the plugin connectivity state. WLED is a passive mDNS
+// scanner with per-device clients, so it is considered "connected" once
+// Init has wired up the scanner.
 func (p *Plugin) Status() string {
+	if p.scanner == nil {
+		return "not_initialized"
+	}
+	return "connected"
+}
+
+// Stats reports the discovered and active (subscribed) device counts.
+func (p *Plugin) Stats() bridge.PluginStats {
 	p.mu.RLock()
-	n := len(p.subscribed)
-	p.mu.RUnlock()
-	return fmt.Sprintf("tracking %d device(s)", n)
+	defer p.mu.RUnlock()
+	return bridge.PluginStats{Discovered: len(p.byMAC), Active: len(p.subscribed)}
 }
 
 // Init starts the mDNS scanner and wires callbacks.

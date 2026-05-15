@@ -4,15 +4,16 @@ import {
   ArrowDownUp, ArrowDown, ArrowUp, Search, X,
   Activity, Antenna, BatteryMedium, Bell, ChevronDown, ChevronLeft, ChevronRight,
   CircleDot, Droplet, Gauge,
-  Layers, Lightbulb, Link2, Link2Off, Palette, Plug, ScrollText, Sparkles, Sun,
-  Thermometer, ToggleLeft, Unlink, Wifi, WifiOff, Zap,
+  Layers, Lightbulb, Link2, Link2Off, MousePointerClick, Palette, Sparkles, Sun,
+  Thermometer, ToggleLeft, Unlink, Zap,
 } from 'lucide-react'
 import {
-  api, connectEvents,
-  type DiscoveredEntity, type Plugin, type PluginEvent, type WsEvent,
+  api,
+  type DiscoveredEntity, type Plugin,
 } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { useToasts } from '@/lib/toasts'
+import { clusterSiblings, siblingKeyOf, type SiblingInfo } from '@/lib/siblings'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -25,7 +26,7 @@ type SortKey = 'name' | 'remoteId' | 'plugin' | 'kind' | 'mapped'
 type SortDir = 'asc' | 'desc'
 
 const KIND_ORDER: Record<string, number> = {
-  colorlight: 0, dimmer: 1, light: 2, sensor: 3, binary: 4,
+  colorlight: 0, dimmer: 1, light: 2, sensor: 3, binary: 4, button: 5,
 }
 
 const ROW_KEY = (r: Pick<Row, 'pluginId' | 'id'>) => `${r.pluginId}\u0000${r.id}`
@@ -39,6 +40,7 @@ function kindBadge(kind: string): string {
     case 'light':      return 'bg-yellow-500/10 text-yellow-700 dark:text-yellow-300 border-yellow-500/30'
     case 'sensor':     return 'bg-sky-500/10 text-sky-700 dark:text-sky-300 border-sky-500/30'
     case 'binary':     return 'bg-slate-500/10 text-slate-700 dark:text-slate-300 border-slate-500/30'
+    case 'button':     return 'bg-violet-500/10 text-violet-700 dark:text-violet-300 border-violet-500/30'
     default:           return 'bg-muted text-muted-foreground border-border'
   }
 }
@@ -66,12 +68,14 @@ function deviceIconFor(kind: string, id: string, attrs?: Record<string, unknown>
       case 'light':      return 'bg-yellow-500/10 text-yellow-600 dark:text-yellow-400'
       case 'sensor':     return 'bg-sky-500/10 text-sky-600 dark:text-sky-400'
       case 'binary':     return 'bg-slate-500/10 text-slate-600 dark:text-slate-400'
+      case 'button':     return 'bg-violet-500/10 text-violet-600 dark:text-violet-400'
       default:           return 'bg-muted text-muted-foreground'
     }
   })()
   if (kind === 'colorlight') return { Icon: Palette, tone }
   if (kind === 'dimmer' || kind === 'light') return { Icon: Lightbulb, tone }
   if (kind === 'binary') return { Icon: ToggleLeft, tone }
+  if (kind === 'button') return { Icon: MousePointerClick, tone }
   if (kind === 'sensor') {
     const hay = (id + ' ' + Object.values(attrs ?? {}).join(' ')).toLowerCase()
     if (/battery|batt/.test(hay)) return { Icon: BatteryMedium, tone }
@@ -173,102 +177,6 @@ function KpiCard({
   )
 }
 
-// ── Recent activity ───────────────────────────────────────────────────────────
-
-const ACTIVITY_CODES = new Set<string>([
-  'entity_added', 'entity_removed',
-  'mapping_added', 'mapping_removed',
-  'discovery_completed',
-  'connect_ok', 'connect_failed', 'auth_failed',
-])
-
-function activityIcon(code: string): { Icon: typeof Lightbulb; tone: string } {
-  switch (code) {
-    case 'entity_added':         return { Icon: Sparkles,   tone: 'text-blue-500' }
-    case 'entity_removed':       return { Icon: X,          tone: 'text-muted-foreground' }
-    case 'mapping_added':        return { Icon: Link2,      tone: 'text-emerald-500' }
-    case 'mapping_removed':      return { Icon: Link2Off,   tone: 'text-amber-500' }
-    case 'discovery_completed':  return { Icon: Antenna,    tone: 'text-sky-500' }
-    case 'connect_ok':           return { Icon: Wifi,       tone: 'text-emerald-500' }
-    case 'connect_failed':       return { Icon: WifiOff,    tone: 'text-destructive' }
-    case 'auth_failed':          return { Icon: WifiOff,    tone: 'text-destructive' }
-    default:                     return { Icon: ScrollText, tone: 'text-muted-foreground' }
-  }
-}
-
-function relTime(iso: string): string {
-  const t = new Date(iso).getTime()
-  if (Number.isNaN(t)) return ''
-  const diff = Math.max(0, Date.now() - t)
-  if (diff < 5_000) return 'just now'
-  if (diff < 60_000) return `${Math.floor(diff / 1000)}s ago`
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`
-  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`
-  return `${Math.floor(diff / 86_400_000)}d ago`
-}
-
-function RecentActivity() {
-  const [events, setEvents] = useState<PluginEvent[]>([])
-  // tick once a minute so "Xm ago" labels update without new events
-  const [, forceTick] = useState(0)
-  useEffect(() => {
-    const t = setInterval(() => forceTick((n) => (n + 1) % 1_000_000), 30_000)
-    return () => clearInterval(t)
-  }, [])
-
-  const { data: initial } = useQuery({
-    queryKey: ['plugin-events-global', 'recent'],
-    queryFn: () => api.pluginEventsGlobal({ limit: 100 }),
-    staleTime: 60_000,
-  })
-  useEffect(() => {
-    if (!initial) return
-    setEvents(initial.filter((e) => ACTIVITY_CODES.has(e.code)))
-  }, [initial])
-
-  useEffect(() => {
-    return connectEvents((e: WsEvent) => {
-      if (e.type !== 'pluginEvent') return
-      const ev = e.data as PluginEvent
-      if (!ACTIVITY_CODES.has(ev.code)) return
-      setEvents((prev) => [...prev, ev].slice(-50))
-    })
-  }, [])
-
-  const last = useMemo(() => events.slice(-6).reverse(), [events])
-
-  return (
-    <div className="rounded-lg border bg-card p-3 flex flex-col min-h-0">
-      <div className="flex items-center gap-2 mb-2 shrink-0">
-        <Activity className="size-3.5 text-muted-foreground" />
-        <span className="text-[11px] uppercase tracking-wider text-muted-foreground">Recent activity</span>
-      </div>
-      {last.length === 0 ? (
-        <p className="text-xs text-muted-foreground">No recent events.</p>
-      ) : (
-        <ul className="space-y-1.5 overflow-hidden">
-          {last.map((ev) => {
-            const { Icon, tone } = activityIcon(ev.code)
-            return (
-              <li key={ev.seq} className="flex items-start gap-2 text-xs leading-snug">
-                <Icon className={`size-3.5 shrink-0 mt-0.5 ${tone}`} />
-                <div className="min-w-0 flex-1">
-                  <div className="truncate" title={ev.message}>{ev.message}</div>
-                  <div className="text-[10px] text-muted-foreground truncate">
-                    <span className="font-mono">{ev.pluginId}</span>
-                    <span className="mx-1">·</span>
-                    <span>{relTime(ev.time)}</span>
-                  </div>
-                </div>
-              </li>
-            )
-          })}
-        </ul>
-      )}
-    </div>
-  )
-}
-
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function DiscoveredPage() {
@@ -351,11 +259,6 @@ export default function DiscoveredPage() {
     return { byPlugin, byKind, byArea, mapped, total: rows.length, unmapped: rows.length - mapped }
   }, [rows])
 
-  const pluginsConnected = useMemo(
-    () => (plugins ?? []).filter((p) => p.status.toLowerCase() === 'connected').length,
-    [plugins],
-  )
-
   // ── Filter + sort pipeline ───────────────────────────────────────────────
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
@@ -394,6 +297,18 @@ export default function DiscoveredPage() {
     })
     return list
   }, [rows, query, pluginFilter, kindFilter, areaFilter, statusFilter, sort])
+
+  // Cluster sibling rows (e.g. Z2M split-button entities sharing an IEEE) so
+  // they always appear adjacent regardless of the active sort/group choice.
+  // Done before pagination so siblings never get split across pages.
+  const { ordered: filteredOrdered, siblingInfo } = useMemo(
+    () => clusterSiblings(
+      filtered,
+      (r) => siblingKeyOf({ pluginId: r.pluginId, remoteEntityId: r.id }),
+      (r) => ROW_KEY(r),
+    ),
+    [filtered],
+  )
 
   // Drop selections that are no longer visible (e.g. filter changed, row gone).
   useEffect(() => {
@@ -556,51 +471,35 @@ export default function DiscoveredPage() {
     <div className="space-y-3">
       {/* Header */}
       <div className="flex items-baseline justify-between">
-        <h1 className="text-lg font-semibold">
-          Discovered{' '}
-          <span className="ml-1 text-sm font-normal text-muted-foreground">
-            ({filtered.length}{filtered.length !== counts.total ? ` / ${counts.total}` : ''})
-          </span>
-        </h1>
+        <h1 className="text-lg font-semibold">Discovered</h1>
       </div>
 
-      {/* KPI row + recent activity */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-2">
-        <div className="grid grid-cols-2 gap-2">
-          <KpiCard
-            label="Total discovered"
-            value={counts.total}
-            hint="All entities found"
-            Icon={Antenna}
-            tone="bg-sky-500/10 text-sky-600 dark:text-sky-400"
-            accent="border-l-sky-500"
-          />
-          <KpiCard
-            label="New"
-            value={counts.unmapped}
-            hint={counts.unmapped > 0 ? 'Awaiting bridging' : 'Nothing new'}
-            Icon={Sparkles}
-            tone="bg-blue-500/10 text-blue-600 dark:text-blue-400"
-            accent="border-l-blue-500"
-          />
-          <KpiCard
-            label="Bridged"
-            value={counts.mapped}
-            hint={counts.total > 0 ? `${Math.round((counts.mapped / counts.total) * 100)}% of total` : 'None yet'}
-            Icon={Link2}
-            tone="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
-            accent="border-l-emerald-500"
-          />
-          <KpiCard
-            label="Plugins active"
-            value={`${pluginsConnected} / ${plugins?.length ?? 0}`}
-            hint={pluginsConnected === (plugins?.length ?? 0) ? 'All connected' : 'Some offline'}
-            Icon={Plug}
-            tone="bg-amber-500/10 text-amber-600 dark:text-amber-400"
-            accent="border-l-amber-500"
-          />
-        </div>
-        <RecentActivity />
+      {/* KPI row */}
+      <div className="grid grid-cols-3 gap-2">
+        <KpiCard
+          label="Total discovered"
+          value={counts.total}
+          hint="All entities found"
+          Icon={Antenna}
+          tone="bg-sky-500/10 text-sky-600 dark:text-sky-400"
+          accent="border-l-sky-500"
+        />
+        <KpiCard
+          label="New"
+          value={counts.unmapped}
+          hint={counts.unmapped > 0 ? 'Awaiting bridging' : 'Nothing new'}
+          Icon={Sparkles}
+          tone="bg-blue-500/10 text-blue-600 dark:text-blue-400"
+          accent="border-l-blue-500"
+        />
+        <KpiCard
+          label="Bridged"
+          value={counts.mapped}
+          hint={counts.total > 0 ? `${Math.round((counts.mapped / counts.total) * 100)}% of total` : 'None yet'}
+          Icon={Link2}
+          tone="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+          accent="border-l-emerald-500"
+        />
       </div>
 
       {/* Toolbar */}
@@ -687,7 +586,7 @@ export default function DiscoveredPage() {
         {plugins && plugins.length > 0 && (
           <div className="flex flex-wrap items-center gap-1.5">
             <span className="text-[10px] uppercase tracking-wider text-muted-foreground mr-1">Plugin</span>
-            {plugins.map((p) => (
+            {[...(plugins ?? [])].sort((a, b) => a.id.localeCompare(b.id)).map((p) => (
               <Chip
                 key={p.id}
                 label={p.id}
@@ -789,7 +688,7 @@ export default function DiscoveredPage() {
         const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize))
         const safePage = Math.min(page, totalPages - 1)
         const start = safePage * pageSize
-        const paged = filtered.slice(start, start + pageSize)
+        const paged = filteredOrdered.slice(start, start + pageSize)
 
         // Build group buckets in iteration order of `paged` so sort is preserved.
         const groups: { key: string; label: string; items: Row[] }[] = []
@@ -853,6 +752,7 @@ export default function DiscoveredPage() {
                       expanded={expanded}
                       busy={busy}
                       dsuidByRemote={dsuidByRemote}
+                      siblingInfo={siblingInfo}
                       onToggleRow={toggleRow}
                       onToggleExpand={toggleExpanded}
                       onBridgeOne={(r) => createMut.mutate({
@@ -944,7 +844,7 @@ export default function DiscoveredPage() {
 // ── Group block & row ────────────────────────────────────────────────────────
 
 function GroupBlock({
-  group, groupBy, counts, selected, expanded, busy, dsuidByRemote,
+  group, groupBy, counts, selected, expanded, busy, dsuidByRemote, siblingInfo,
   onToggleRow, onToggleExpand, onBridgeOne, onUnbridgeOne, onBridgeAllNew,
 }: {
   group: { key: string; label: string; items: Row[] }
@@ -954,6 +854,7 @@ function GroupBlock({
   expanded: Set<string>
   busy: boolean
   dsuidByRemote: Map<string, string>
+  siblingInfo: Map<string, SiblingInfo>
   onToggleRow: (key: string) => void
   onToggleExpand: (key: string) => void
   onBridgeOne: (r: Row) => void
@@ -1007,6 +908,7 @@ function GroupBlock({
           expanded={expanded.has(ROW_KEY(r))}
           busy={busy}
           dsuidByRemote={dsuidByRemote}
+          sibling={siblingInfo.get(ROW_KEY(r))}
           onToggleSelect={() => onToggleRow(ROW_KEY(r))}
           onToggleExpand={() => onToggleExpand(ROW_KEY(r))}
           onBridge={() => onBridgeOne(r)}
@@ -1018,7 +920,7 @@ function GroupBlock({
 }
 
 function EntityRow({
-  row, selected, expanded, busy, dsuidByRemote,
+  row, selected, expanded, busy, dsuidByRemote, sibling,
   onToggleSelect, onToggleExpand, onBridge, onUnbridge,
 }: {
   row: Row
@@ -1026,6 +928,7 @@ function EntityRow({
   expanded: boolean
   busy: boolean
   dsuidByRemote: Map<string, string>
+  sibling?: SiblingInfo
   onToggleSelect: () => void
   onToggleExpand: () => void
   onBridge: () => void
@@ -1061,6 +964,8 @@ function EntityRow({
       >
         <td
           className="pl-3 pr-1 py-2 align-middle"
+          style={sibling ? { boxShadow: `inset 4px 0 0 ${sibling.color}` } : undefined}
+          title={sibling ? `Part of ${sibling.prefix} (${sibling.size} entities on the same physical hardware)` : undefined}
           onClick={(e) => e.stopPropagation()}
         >
           <input
@@ -1084,6 +989,16 @@ function EntityRow({
               }`}
             />
             <div className="font-medium truncate" title={row.name}>{row.name}</div>
+            {sibling && (
+              <span
+                className="inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[10px] font-mono leading-none shrink-0"
+                style={{ color: sibling.color, backgroundColor: `${sibling.color}1a` }}
+                title={`Part of ${sibling.prefix} — ${sibling.size} entities on the same physical device`}
+              >
+                <Link2 className="size-3" />
+                {sibling.index + 1}/{sibling.size}
+              </span>
+            )}
           </div>
           {summaryParts.length > 0 && (
             <div className="ml-5 text-[11px] text-muted-foreground truncate">

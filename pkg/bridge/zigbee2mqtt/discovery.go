@@ -1,6 +1,9 @@
 package zigbee2mqtt
 
 import (
+	"encoding/json"
+	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -34,19 +37,51 @@ type definition struct {
 // an Endpoint string and the Property name is auto-suffixed with that
 // endpoint (e.g. `state_l1`).
 type expose struct {
-	Type     string   `json:"type"`
-	Name     string   `json:"name"`
-	Property string   `json:"property"`
-	Endpoint string   `json:"endpoint"`
-	Access   int      `json:"access"`
-	Features []expose `json:"features"`
+	Type     string      `json:"type"`
+	Name     string      `json:"name"`
+	Property string      `json:"property"`
+	Endpoint string      `json:"endpoint"`
+	Access   int         `json:"access"`
+	Values   jsonStrings `json:"values"`
+	Features []expose    `json:"features"`
+}
+
+// jsonStrings is a JSON array that tolerates mixed element types (string,
+// number, bool) by converting each element to its string representation.
+// Z2M sometimes sends numeric values inside enum-typed exposes.
+type jsonStrings []string
+
+func (j *jsonStrings) UnmarshalJSON(b []byte) error {
+	var raw []json.RawMessage
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return err
+	}
+	out := make([]string, 0, len(raw))
+	for _, r := range raw {
+		var s string
+		if err := json.Unmarshal(r, &s); err == nil {
+			out = append(out, s)
+			continue
+		}
+		// number, bool, or other scalar — convert via interface{}
+		var v any
+		if err := json.Unmarshal(r, &v); err != nil {
+			continue
+		}
+		out = append(out, fmt.Sprintf("%v", v))
+	}
+	*j = out
+	return nil
 }
 
 // endpoint represents one bridgeable entity extracted from a device's exposes.
 type endpoint struct {
 	// Endpoint name (e.g. "l1", "l2"); empty for single-endpoint devices.
+	// For button entities split off an `action` enum, this is "btn" (single
+	// button) or "btn_<prefix>" (one of several buttons on the same device).
 	Name string
-	// Kind is the vDC output kind: "light" (binary), "dimmer", or "colorlight".
+	// Kind is the vDC output kind: "light" (binary), "dimmer", "colorlight",
+	// or "button".
 	Kind string
 	// HasBrightness / HasColor reflect the supported features.
 	HasBrightness bool
@@ -55,6 +90,9 @@ type endpoint struct {
 	StateProp      string // e.g. "state" or "state_l1"
 	BrightnessProp string // e.g. "brightness"
 	ColorProp      string // e.g. "color"
+	// Button-only fields.
+	ActionProp   string // e.g. "action" — Z2M property carrying the click event
+	ActionPrefix string // prefix before the action verb, "" for single-button
 }
 
 // endpoints walks the device's exposes tree and returns one endpoint entry
@@ -101,9 +139,113 @@ func (d *bridgeDevice) endpoints() []endpoint {
 				ep.StateProp = withEP("state", ep.Name)
 			}
 			out = append(out, ep)
+		case "enum":
+			if ex.Name != "action" || len(ex.Values) == 0 {
+				continue
+			}
+			prop := ex.Property
+			if prop == "" {
+				prop = "action"
+			}
+			out = append(out, expandActionButtons(prop, ex.Values)...)
 		}
 	}
 	return out
+}
+
+// expandActionButtons turns a Z2M `action` enum into one endpoint per
+// distinct button. Action values that don't match a known click suffix
+// (e.g. "single", "double", "hold", "..._click", "..._press_release") are
+// silently skipped — they don't represent a press we can forward.
+func expandActionButtons(prop string, values []string) []endpoint {
+	prefixes := make(map[string]struct{})
+	for _, v := range values {
+		_, suffix := splitButtonAction(v)
+		if suffix == "" {
+			continue
+		}
+		prefix, _ := splitButtonAction(v)
+		prefixes[prefix] = struct{}{}
+	}
+	if len(prefixes) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(prefixes))
+	for p := range prefixes {
+		keys = append(keys, p)
+	}
+	sort.Strings(keys)
+	out := make([]endpoint, 0, len(keys))
+	for _, p := range keys {
+		name := "btn"
+		if p != "" {
+			name = "btn_" + p
+		}
+		out = append(out, endpoint{
+			Name:         name,
+			Kind:         "button",
+			ActionProp:   prop,
+			ActionPrefix: p,
+		})
+	}
+	return out
+}
+
+// buttonActionSuffixes are the Z2M action verbs we recognize. Order matters:
+// multi-word suffixes (e.g. "press_release") must be matched before their
+// single-word prefixes ("press") to avoid mis-grouping a button id.
+var buttonActionSuffixes = []string{
+	"press_release", "hold_release", "long_release",
+	"single", "double", "triple", "quadruple",
+	"click", "press", "release", "long", "hold",
+}
+
+// splitButtonAction splits a Z2M action enum value into a (button-id prefix,
+// click-verb suffix). Returns ("", "") if no known verb is present.
+//
+// Examples:
+//
+//	"single"            -> ("",           "single")
+//	"arrow_left_click"  -> ("arrow_left", "click")
+//	"on_press_release"  -> ("on",         "press_release")
+//	"unknown_thing"     -> ("",           "")
+func splitButtonAction(v string) (string, string) {
+	for _, s := range buttonActionSuffixes {
+		if v == s {
+			return "", s
+		}
+		if strings.HasSuffix(v, "_"+s) {
+			return strings.TrimSuffix(v, "_"+s), s
+		}
+	}
+	return "", ""
+}
+
+// mapActionSuffix maps a Z2M click verb to a digitalSTROM-style action.
+// Returns "" for verbs we don't recognize.
+//
+// The vocabulary mirrors vdcd's `ButtonBehaviour::clickTypeName` so the same
+// strings can be parsed downstream:
+//   - tip_1x .. tip_4x  ← single/multi tip
+//   - hold              ← ct_hold_start (begin sustained press)
+//   - release           ← ct_hold_end   (end of sustained press)
+func mapActionSuffix(suffix string) string {
+	switch suffix {
+	case "single", "click", "press":
+		return "tip"
+	case "double":
+		return "tip2"
+	case "triple":
+		return "tip3"
+	case "quadruple":
+		return "tip4"
+	case "long", "hold":
+		return "hold"
+	case "release", "hold_release", "long_release", "press_release":
+		return "release"
+	default:
+		return ""
+	}
 }
 
 // pickProp returns the explicit Property name if z2m provided one, else
@@ -137,6 +279,12 @@ func (d *bridgeDevice) displayName(ep endpoint) string {
 	name := d.FriendlyName
 	if name == "" {
 		name = d.IEEE
+	}
+	if ep.Kind == "button" {
+		if ep.ActionPrefix == "" {
+			return name + " · button"
+		}
+		return name + " · " + ep.ActionPrefix
 	}
 	if ep.Name != "" {
 		name = name + " (" + ep.Name + ")"

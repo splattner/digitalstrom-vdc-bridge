@@ -338,3 +338,103 @@ func deepCopy(in map[string]any) map[string]any {
 	}
 	return out
 }
+
+// handlePluginSuggest returns dynamic option suggestions for a schema field
+// whose OptionsSource is "plugin". Plugins opt in by implementing
+// bridge.Suggester. When the plugin is not running yet, the field type does
+// not advertise dynamic options, or the plugin returns no suggestions, an
+// empty array is returned.
+func (s *Server) handlePluginSuggest(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.Bridges == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "bridges not configured"})
+		return
+	}
+	id := chi.URLParam(r, "id")
+	field := chi.URLParam(r, "field")
+	p, ok := s.cfg.Bridges.Plugin(id)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "plugin not found"})
+		return
+	}
+	sg, ok := p.(bridge.Suggester)
+	if !ok {
+		writeJSON(w, http.StatusOK, []bridge.SuggestOption{})
+		return
+	}
+	opts, err := sg.Suggest(r.Context(), field)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	if opts == nil {
+		opts = []bridge.SuggestOption{}
+	}
+	writeJSON(w, http.StatusOK, opts)
+}
+
+// handlePluginRestart stops and restarts a single plugin instance using the
+// persisted config (essentially an UpdatePlugin without changing config).
+func (s *Server) handlePluginRestart(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.Bridges == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "bridges not configured"})
+		return
+	}
+	id := chi.URLParam(r, "id")
+	if err := s.cfg.Bridges.RestartPlugin(r.Context(), id); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// handlePluginEnable / handlePluginDisable toggles the persisted Disabled
+// flag and starts/stops the running instance accordingly.
+func (s *Server) handlePluginEnable(w http.ResponseWriter, r *http.Request) {
+	s.handlePluginSetEnabled(w, r, true)
+}
+func (s *Server) handlePluginDisable(w http.ResponseWriter, r *http.Request) {
+	s.handlePluginSetEnabled(w, r, false)
+}
+func (s *Server) handlePluginSetEnabled(w http.ResponseWriter, r *http.Request, enabled bool) {
+	if s.cfg.Bridges == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "bridges not configured"})
+		return
+	}
+	id := chi.URLParam(r, "id")
+	if err := s.cfg.Bridges.SetEnabled(r.Context(), id, enabled); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "enabled": enabled})
+}
+
+// handlePluginRediscover triggers an immediate Discover() pass on the running
+// plugin and emits a discovery_completed event so the UI can react. Returns
+// the freshly discovered entities (same shape as GET /discovered).
+func (s *Server) handlePluginRediscover(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.Bridges == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "bridges not configured"})
+		return
+	}
+	id := chi.URLParam(r, "id")
+	p, ok := s.cfg.Bridges.Plugin(id)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "plugin not running"})
+		return
+	}
+	s.cfg.Bridges.EmitPluginEvent(id, bridge.LevelInfo, bridge.CodeDiscoveryStart, "discovery requested via UI", nil)
+	entities, err := p.Discover(r.Context())
+	if err != nil {
+		s.cfg.Bridges.EmitPluginEvent(id, bridge.LevelWarn, bridge.CodeConnectFailed, "discovery failed", map[string]any{"error": err.Error()})
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	s.cfg.Bridges.EmitPluginEvent(id, bridge.LevelInfo, bridge.CodeDiscoveryDone, "discovery completed", map[string]any{"total": len(entities)})
+	ms := s.cfg.Bridges.Mappings()
+	out := make([]discoveredEntity, len(entities))
+	for i, e := range entities {
+		_, mapped := ms.GetByRemote(id, e.ID)
+		out[i] = discoveredEntity{RemoteEntity: e, Mapped: mapped}
+	}
+	writeJSON(w, http.StatusOK, out)
+}

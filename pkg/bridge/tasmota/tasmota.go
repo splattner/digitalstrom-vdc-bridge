@@ -79,17 +79,19 @@ type deviceSub struct {
 // ID returns the configured plugin instance id.
 func (p *Plugin) ID() string { return p.id }
 
-// Status returns the current broker status plus a tracking summary.
+// Status returns the underlying broker connection state.
 func (p *Plugin) Status() string {
 	if p.broker == nil {
 		return "not_initialized"
 	}
-	s := p.broker.Status()
+	return p.broker.Status()
+}
+
+// Stats reports the discovered and active (subscribed) device counts.
+func (p *Plugin) Stats() bridge.PluginStats {
 	p.mu.Lock()
-	d := len(p.devices)
-	a := len(p.subscribed)
-	p.mu.Unlock()
-	return fmt.Sprintf("%s · %d device(s) · %d active", s, d, a)
+	defer p.mu.Unlock()
+	return bridge.PluginStats{Discovered: len(p.devices), Active: len(p.subscribed)}
 }
 
 // Init resolves the broker and starts the discovery subscription.

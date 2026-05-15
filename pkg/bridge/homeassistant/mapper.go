@@ -6,13 +6,14 @@ import (
 )
 
 // classifyEntity returns the bridge kind (light, dimmer, colorlight, sensor,
-// binary, "") for an HA entity, or "" if it isn't supported in v1.
+// binary, button, "") for an HA entity, or "" if it isn't supported in v1.
 //
-// Rules (v1, lights + sensors only):
+// Rules (v1, lights + sensors + buttons only):
 //   - light.* with `supported_color_modes` containing any of {hs, rgb, rgbw, rgbww, xy} → "colorlight"
 //   - light.* with `brightness` in supported_color_modes (or attributes) → "dimmer"
 //   - light.* otherwise → "light" (relay/on-off)
 //   - sensor.* with a known numeric device_class → "sensor"
+//   - event.* with device_class `button` → "button"
 //   - everything else → "" (filtered out of discoverable list)
 func classifyEntity(e haEntity) string {
 	domain, _, ok := splitEntityID(e.EntityID)
@@ -27,6 +28,53 @@ func classifyEntity(e haEntity) string {
 			return "sensor"
 		}
 		return ""
+	case "event":
+		if isButtonEvent(e) {
+			return "button"
+		}
+		return ""
+	default:
+		return ""
+	}
+}
+
+// isButtonEvent reports whether an HA event entity represents a physical
+// button. Most integrations set device_class="button"; as a fallback we accept
+// entities whose event_types list contains a press-style verb so that
+// integrations that don't set the device class still work.
+func isButtonEvent(e haEntity) bool {
+	if dc, _ := e.Attributes["device_class"].(string); strings.EqualFold(strings.TrimSpace(dc), "button") {
+		return true
+	}
+	for _, t := range stringSliceAttr(e.Attributes, "event_types") {
+		if mapHAEventType(t) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// mapHAEventType maps a Home Assistant event_type string to a digitalSTROM
+// click action.
+//
+// Vocabulary mirrors vdcd's `ButtonBehaviour::clickTypeName`:
+//   - tip / tip2..4    \u2190 short single/multi presses
+//   - hold             \u2190 ct_hold_start (begin sustained press)
+//   - release          \u2190 ct_hold_end   (end of sustained press)
+func mapHAEventType(t string) string {
+	switch strings.ToLower(strings.TrimSpace(t)) {
+	case "single_press", "single", "press", "short_press", "initial_press", "click":
+		return "tip"
+	case "double_press", "double", "double_click":
+		return "tip2"
+	case "triple_press", "triple", "triple_click":
+		return "tip3"
+	case "quadruple_press", "quadruple":
+		return "tip4"
+	case "long_press", "long", "hold":
+		return "hold"
+	case "long_release", "release", "short_release", "hold_release", "press_release":
+		return "release"
 	default:
 		return ""
 	}

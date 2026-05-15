@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -127,12 +128,19 @@ type brokerImpl struct {
 	id  string
 	cfg config
 
-	mu           sync.RWMutex
-	client       paho.Client
-	status       string
-	lastErr      error
-	connected    atomic.Bool
-	subs         map[*subscriptionImpl]struct{}
+	mu        sync.RWMutex
+	client    paho.Client
+	status    string
+	lastErr   error
+	connected atomic.Bool
+	subs      map[*subscriptionImpl]struct{}
+	// topicSubs lists the active subscriptions per topic filter so that
+	// multiple consumers of the same topic can fan out from a single Paho
+	// subscription. Paho only allows one handler per topic; without this
+	// fan-out, a second Subscribe on the same topic silently displaces the
+	// first (was the cause of multi-button z2m devices losing all but the
+	// last bridged button).
+	topicSubs    map[string][]*subscriptionImpl
 	onConnect    []func()
 	onDisconnect []func(error)
 	onConnectErr []func(error)
@@ -142,10 +150,11 @@ type brokerImpl struct {
 
 func newBroker(id string, c config) *brokerImpl {
 	return &brokerImpl{
-		id:     id,
-		cfg:    c,
-		status: "starting",
-		subs:   make(map[*subscriptionImpl]struct{}),
+		id:        id,
+		cfg:       c,
+		status:    "starting",
+		subs:      make(map[*subscriptionImpl]struct{}),
+		topicSubs: make(map[string][]*subscriptionImpl),
 	}
 }
 
@@ -207,16 +216,26 @@ func (b *brokerImpl) run(ctx context.Context) {
 		b.setStatus("connected", nil)
 		logging.Info("mqtt_connected", logging.Fields{"id": b.id, "host": b.cfg.host})
 
-		// Re-install all active subscriptions on (re)connect.
+		// Re-install one Paho subscription per distinct topic on (re)connect.
+		// All locally registered handlers for that topic share the same Paho
+		// subscription via the fan-out dispatcher below.
 		b.mu.RLock()
-		subs := make([]*subscriptionImpl, 0, len(b.subs))
-		for s := range b.subs {
-			subs = append(subs, s)
+		topics := make(map[string]byte, len(b.topicSubs))
+		for topic, list := range b.topicSubs {
+			var maxQos byte
+			for _, s := range list {
+				if s.qos > maxQos {
+					maxQos = s.qos
+				}
+			}
+			topics[topic] = maxQos
 		}
 		cbs := append([]func(){}, b.onConnect...)
 		b.mu.RUnlock()
-		for _, s := range subs {
-			b.installSub(s)
+		for topic, qos := range topics {
+			if err := b.installTopic(topic, qos); err != nil {
+				logging.Warn("mqtt_resubscribe_error", logging.Fields{"id": b.id, "topic": topic, "error": err.Error()})
+			}
 		}
 		for _, cb := range cbs {
 			go cb()
@@ -305,7 +324,10 @@ func (b *brokerImpl) Publish(ctx context.Context, topic string, payload []byte, 
 	}
 }
 
-// Subscribe implements mqttsvc.Broker.Subscribe.
+// Subscribe implements mqttsvc.Broker.Subscribe. Multiple subscribers may
+// register handlers for the same topic; all are dispatched on every received
+// message (Paho itself only retains one handler per topic, so we fan out
+// here).
 func (b *brokerImpl) Subscribe(topic string, qos byte, h mqttsvc.MessageHandler) (mqttsvc.Subscription, error) {
 	if h == nil {
 		return nil, errors.New("mqtt: handler is nil")
@@ -313,13 +335,20 @@ func (b *brokerImpl) Subscribe(topic string, qos byte, h mqttsvc.MessageHandler)
 	s := &subscriptionImpl{broker: b, topic: topic, qos: qos, handler: h}
 	b.mu.Lock()
 	b.subs[s] = struct{}{}
+	list := b.topicSubs[topic]
+	first := len(list) == 0
+	b.topicSubs[topic] = append(list, s)
 	connected := b.connected.Load()
 	b.mu.Unlock()
 
-	if connected {
-		if err := b.installSub(s); err != nil {
+	if connected && first {
+		if err := b.installTopic(topic, qos); err != nil {
 			b.mu.Lock()
 			delete(b.subs, s)
+			b.topicSubs[topic] = removeSub(b.topicSubs[topic], s)
+			if len(b.topicSubs[topic]) == 0 {
+				delete(b.topicSubs, topic)
+			}
 			b.mu.Unlock()
 			return nil, err
 		}
@@ -327,20 +356,87 @@ func (b *brokerImpl) Subscribe(topic string, qos byte, h mqttsvc.MessageHandler)
 	return s, nil
 }
 
-func (b *brokerImpl) installSub(s *subscriptionImpl) error {
+// installTopic installs a single Paho subscription for the topic. The Paho
+// callback dispatches to every locally registered handler for that topic.
+func (b *brokerImpl) installTopic(topic string, qos byte) error {
 	b.mu.RLock()
 	c := b.client
 	b.mu.RUnlock()
 	if c == nil {
 		return errors.New("mqtt: not initialised")
 	}
-	tok := c.Subscribe(s.topic, s.qos, func(_ paho.Client, msg paho.Message) {
-		s.handler(msg.Topic(), msg.Payload(), msg.Retained())
+	tok := c.Subscribe(topic, qos, func(_ paho.Client, msg paho.Message) {
+		b.dispatch(msg.Topic(), msg.Payload(), msg.Retained())
 	})
 	if !tok.WaitTimeout(10 * time.Second) {
 		return errors.New("mqtt: subscribe timeout")
 	}
 	return tok.Error()
+}
+
+// dispatch fans a received message out to every active handler whose
+// subscribed topic matches the (possibly wildcard) filter.
+func (b *brokerImpl) dispatch(topic string, payload []byte, retained bool) {
+	b.mu.RLock()
+	handlers := make([]mqttsvc.MessageHandler, 0)
+	for filter, list := range b.topicSubs {
+		if !topicMatches(filter, topic) {
+			continue
+		}
+		for _, s := range list {
+			if s.closed.Load() {
+				continue
+			}
+			handlers = append(handlers, s.handler)
+		}
+	}
+	b.mu.RUnlock()
+	for _, h := range handlers {
+		h(topic, payload, retained)
+	}
+}
+
+// removeSub returns list with s removed (in-place when possible).
+func removeSub(list []*subscriptionImpl, s *subscriptionImpl) []*subscriptionImpl {
+	for i, x := range list {
+		if x == s {
+			return append(list[:i], list[i+1:]...)
+		}
+	}
+	return list
+}
+
+// topicMatches reports whether an MQTT topic filter matches a concrete topic.
+// Supports the standard wildcards: '+' (single level) and '#' (multi level,
+// must be the last segment).
+func topicMatches(filter, topic string) bool {
+	if filter == topic {
+		return true
+	}
+	fp := splitTopic(filter)
+	tp := splitTopic(topic)
+	for i, seg := range fp {
+		if seg == "#" {
+			return true
+		}
+		if i >= len(tp) {
+			return false
+		}
+		if seg == "+" {
+			continue
+		}
+		if seg != tp[i] {
+			return false
+		}
+	}
+	return len(fp) == len(tp)
+}
+
+func splitTopic(t string) []string {
+	if t == "" {
+		return nil
+	}
+	return strings.Split(t, "/")
 }
 
 // OnConnect registers a callback fired after every successful connect.
@@ -405,10 +501,18 @@ func (s *subscriptionImpl) Close() error {
 	}
 	s.broker.mu.Lock()
 	delete(s.broker.subs, s)
+	s.broker.topicSubs[s.topic] = removeSub(s.broker.topicSubs[s.topic], s)
+	last := len(s.broker.topicSubs[s.topic]) == 0
+	if last {
+		delete(s.broker.topicSubs, s.topic)
+	}
 	c := s.broker.client
 	connected := s.broker.connected.Load()
 	s.broker.mu.Unlock()
-	if c != nil && connected {
+	// Only release the Paho subscription when the last interested handler
+	// goes away — otherwise sibling subs on the same topic would also stop
+	// receiving messages.
+	if last && c != nil && connected {
 		c.Unsubscribe(s.topic)
 	}
 	return nil

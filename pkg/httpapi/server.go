@@ -5,6 +5,7 @@ import (
 	"context"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -22,6 +23,10 @@ type Config struct {
 	DSUID string
 	// Description is the human-readable vDC description.
 	Description string
+	// Vendor is the vDC vendor identifier.
+	Vendor string
+	// Model is the vDC model identifier.
+	Model string
 	// State is the shared device state store.
 	State *vdcapi.StateStore
 	// Config is the shared device config store.
@@ -64,14 +69,23 @@ type Server struct {
 	hub      *wsHub
 	debugHub *wsHub
 	router   chi.Router
+
+	// mutable identity (PATCH /api/settings/identity); protected by identityMu.
+	identityMu     sync.RWMutex
+	identityDesc   string
+	identityVendor string
+	identityModel  string
 }
 
 // New creates a new Server. Call Run to start listening.
 func New(cfg Config) *Server {
 	s := &Server{
-		cfg:      cfg,
-		hub:      newWSHub(),
-		debugHub: newWSHub(),
+		cfg:            cfg,
+		hub:            newWSHub(),
+		debugHub:       newWSHub(),
+		identityDesc:   cfg.Description,
+		identityVendor: cfg.Vendor,
+		identityModel:  cfg.Model,
 	}
 	s.router = s.buildRouter()
 	return s
@@ -219,6 +233,7 @@ func (s *Server) buildRouter() chi.Router {
 
 	// Settings endpoints
 	r.Get("/api/settings", s.handleSettings)
+	r.Patch("/api/settings/identity", s.handlePatchIdentity)
 	r.Post("/api/settings/forget-vdsm", s.handleForgetVdsm)
 	r.Get("/api/settings/export", s.handleExportConfig)
 
@@ -233,7 +248,7 @@ func (s *Server) buildRouter() chi.Router {
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)

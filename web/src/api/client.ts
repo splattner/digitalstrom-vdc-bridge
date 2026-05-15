@@ -220,6 +220,8 @@ export const api = {
       { group },
     ),
   settings: () => get<SettingsInfo>('/settings'),
+  patchIdentity: (body: { description?: string; vendor?: string; model?: string }) =>
+    patchJSON<{ ok: boolean; description: string; vendor: string; model: string }>('/settings/identity', body),
   forgetVdsm: () => postJSON<ForgetVdsmResponse>('/settings/forget-vdsm', {}),
   exportConfigUrl: () => `${BASE}/settings/export`,
   pluginEvents: (id: string, opts?: { since?: number; level?: string; limit?: number }) => {
@@ -257,6 +259,19 @@ async function postJSON<T>(path: string, body: unknown): Promise<T> {
 async function putJSON<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    const txt = await res.text()
+    throw new Error(`HTTP ${res.status}: ${txt}`)
+  }
+  return res.json() as Promise<T>
+}
+
+async function patchJSON<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, {
+    method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })

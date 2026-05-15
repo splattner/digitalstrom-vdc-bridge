@@ -2,6 +2,7 @@ package vdcgo
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -36,6 +37,8 @@ type Config struct {
 	EnableDNSSD  bool
 	DSUID        string
 	Description  string
+	Vendor       string
+	Model        string
 	NoAuto       bool
 	// DataDir is the directory for persistent data (scenes, device config).
 	// If empty, no data is persisted across restarts.
@@ -109,6 +112,12 @@ func NewService(cfg Config) (*Service, error) {
 	if cfg.Description == "" {
 		cfg.Description = "vdcgo external"
 	}
+	if cfg.Vendor == "" {
+		cfg.Vendor = "github.com/splattner"
+	}
+	if cfg.Model == "" {
+		cfg.Model = "vdcgo"
+	}
 	state := vdcapi.NewStateStore()
 	scenes := vdcapi.NewSceneStore()
 	configStore := vdcapi.NewConfigStore()
@@ -141,6 +150,28 @@ func NewService(cfg Config) (*Service, error) {
 			if len(loaded) > 0 {
 				cfg.PluginConfigs = loaded
 				logging.Info("plugins_loaded", logging.Fields{"path": pluginsPath, "count": len(loaded)})
+			}
+		}
+
+		// identity.json — persisted description/vendor/model overrides CLI flags.
+		identityPath := filepath.Join(cfg.DataDir, "identity.json")
+		if raw, err := os.ReadFile(identityPath); err == nil {
+			var id struct {
+				Description string `json:"description"`
+				Vendor      string `json:"vendor"`
+				Model       string `json:"model"`
+			}
+			if json.Unmarshal(raw, &id) == nil {
+				if id.Description != "" {
+					cfg.Description = id.Description
+				}
+				if id.Vendor != "" {
+					cfg.Vendor = id.Vendor
+				}
+				if id.Model != "" {
+					cfg.Model = id.Model
+				}
+				logging.Info("identity_loaded", logging.Fields{"path": identityPath})
 			}
 		}
 	}
@@ -220,6 +251,8 @@ func NewService(cfg Config) (*Service, error) {
 			Listen:      cfg.HTTPListen,
 			DSUID:       cfg.DSUID,
 			Description: cfg.Description,
+			Vendor:      cfg.Vendor,
+			Model:       cfg.Model,
 			State:       state,
 			Config:      configStore,
 			Scenes:      scenes,

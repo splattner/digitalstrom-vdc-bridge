@@ -511,6 +511,7 @@ func (p *Plugin) pushState(ctx context.Context, m bridge.Mapping, e haEntity) {
 			if meta, ok := sensorMetaFor(e); ok {
 				_ = p.host.SetSensorDescriptor(ctx, m.DSUID, 0, bridge.SensorDescriptor{
 					Type:       meta.Type,
+					Usage:      meta.Usage,
 					Name:       meta.Name,
 					Min:        meta.Min,
 					Max:        meta.Max,

@@ -119,6 +119,7 @@ var supportedSensorClasses = map[string]struct{}{
 // vdcSensorMeta describes a sensor's vDC type, range and unit.
 type vdcSensorMeta struct {
 	Type       int
+	Usage      int // VdcUsageHint: 0=undefined, 1=room, 2=outdoors, 3=user
 	Name       string
 	Min, Max   float64
 	Resolution float64
@@ -129,23 +130,28 @@ type vdcSensorMeta struct {
 // sensorMetaFor returns vDC sensor metadata for the given HA entity, derived
 // from its device_class. Returns (meta, true) if the class is mapped.
 // VdcSensorType values come from p44vdc/vdc_common/dsdefs.h (sensorType_*).
+//
+// Usage=1 (room) is set for environmental sensors so dSS maps them to the
+// correct dS sensorInput.type (e.g. (temperature, room) → type 9). With
+// usage=undefined dSS maps temperature/humidity to type 255 and they don't
+// surface in the zone status column.
 func sensorMetaFor(e haEntity) (vdcSensorMeta, bool) {
 	dc, _ := e.Attributes["device_class"].(string)
 	switch strings.ToLower(strings.TrimSpace(dc)) {
 	case "temperature":
-		return vdcSensorMeta{Type: 1, Name: "temperature", Min: -40, Max: 125, Resolution: 0.1, SIUnit: "celsius", Symbol: "°C"}, true
+		return vdcSensorMeta{Type: 1, Usage: 1, Name: "temperature", Min: -40, Max: 125, Resolution: 0.1, SIUnit: "celsius", Symbol: "°C"}, true
 	case "humidity":
-		return vdcSensorMeta{Type: 2, Name: "humidity", Min: 0, Max: 100, Resolution: 0.1, SIUnit: "percent", Symbol: "%"}, true
+		return vdcSensorMeta{Type: 2, Usage: 1, Name: "humidity", Min: 0, Max: 100, Resolution: 0.1, SIUnit: "percent", Symbol: "%"}, true
 	case "illuminance":
-		return vdcSensorMeta{Type: 3, Name: "illuminance", Min: 0, Max: 150000, Resolution: 1, SIUnit: "lux", Symbol: "lx"}, true
+		return vdcSensorMeta{Type: 3, Usage: 1, Name: "illuminance", Min: 0, Max: 150000, Resolution: 1, SIUnit: "lux", Symbol: "lx"}, true
 	case "voltage":
 		return vdcSensorMeta{Type: 4, Name: "voltage", Min: 0, Max: 500, Resolution: 0.1, SIUnit: "volt", Symbol: "V"}, true
 	case "co":
-		return vdcSensorMeta{Type: 5, Name: "co", Min: 0, Max: 1000, Resolution: 1, SIUnit: "ppm", Symbol: "ppm"}, true
+		return vdcSensorMeta{Type: 5, Usage: 1, Name: "co", Min: 0, Max: 1000, Resolution: 1, SIUnit: "ppm", Symbol: "ppm"}, true
 	case "pm10":
-		return vdcSensorMeta{Type: 8, Name: "pm10", Min: 0, Max: 1000, Resolution: 1, SIUnit: "microgram_per_cubicmeter", Symbol: "µg/m³"}, true
+		return vdcSensorMeta{Type: 8, Usage: 1, Name: "pm10", Min: 0, Max: 1000, Resolution: 1, SIUnit: "microgram_per_cubicmeter", Symbol: "µg/m³"}, true
 	case "pm25":
-		return vdcSensorMeta{Type: 9, Name: "pm2.5", Min: 0, Max: 1000, Resolution: 1, SIUnit: "microgram_per_cubicmeter", Symbol: "µg/m³"}, true
+		return vdcSensorMeta{Type: 9, Usage: 1, Name: "pm2.5", Min: 0, Max: 1000, Resolution: 1, SIUnit: "microgram_per_cubicmeter", Symbol: "µg/m³"}, true
 	case "power":
 		return vdcSensorMeta{Type: 14, Name: "power", Min: 0, Max: 10000, Resolution: 1, SIUnit: "watt", Symbol: "W"}, true
 	case "current":
@@ -153,9 +159,9 @@ func sensorMetaFor(e haEntity) (vdcSensorMeta, bool) {
 	case "energy":
 		return vdcSensorMeta{Type: 16, Name: "energy", Min: 0, Max: 1e7, Resolution: 0.1, SIUnit: "kilowatt_hour", Symbol: "kWh"}, true
 	case "pressure":
-		return vdcSensorMeta{Type: 18, Name: "pressure", Min: 800, Max: 1200, Resolution: 0.1, SIUnit: "hectopascal", Symbol: "hPa"}, true
+		return vdcSensorMeta{Type: 18, Usage: 1, Name: "pressure", Min: 800, Max: 1200, Resolution: 0.1, SIUnit: "hectopascal", Symbol: "hPa"}, true
 	case "co2":
-		return vdcSensorMeta{Type: 22, Name: "co2", Min: 0, Max: 5000, Resolution: 1, SIUnit: "ppm", Symbol: "ppm"}, true
+		return vdcSensorMeta{Type: 22, Usage: 1, Name: "co2", Min: 0, Max: 5000, Resolution: 1, SIUnit: "ppm", Symbol: "ppm"}, true
 	case "battery":
 		// Use sensorType_percent (32) for battery percentage.
 		return vdcSensorMeta{Type: 32, Name: "battery", Min: 0, Max: 100, Resolution: 1, SIUnit: "percent", Symbol: "%"}, true

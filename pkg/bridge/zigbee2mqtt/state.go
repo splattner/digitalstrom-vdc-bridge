@@ -54,6 +54,25 @@ func (m stateMessage) colorField(key string) map[string]any {
 	return nil
 }
 
+// boolField returns the boolean value at key.
+// Handles JSON bool, string ("true"/"on"/"1"), and float64 (non-zero = true).
+func (m stateMessage) boolField(key string) (bool, bool) {
+	v, ok := m[key]
+	if !ok {
+		return false, false
+	}
+	switch b := v.(type) {
+	case bool:
+		return b, true
+	case string:
+		lo := strings.ToLower(b)
+		return lo == "true" || lo == "on" || lo == "1", true
+	case float64:
+		return b != 0, true
+	}
+	return false, false
+}
+
 // briToVDC converts z2m's 0..255 brightness to a 0..100 vDC channel value.
 // If the device is off, returns 0 regardless.
 func briToVDC(bri float64, on bool) float64 {

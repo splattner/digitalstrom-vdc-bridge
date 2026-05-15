@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.3](https://github.com/splattner/digitalstrom-vdc-bridge/compare/v0.1.2...v0.1.3) (2026-05-15)
+
+
+### Bug Fixes
+
+* also create container images on release ([#13](https://github.com/splattner/digitalstrom-vdc-bridge/issues/13)) ([e31e0af](https://github.com/splattner/digitalstrom-vdc-bridge/commit/e31e0af6cb4efe56e96cacf58c332eb6e41d7309))
+
 ## [0.1.2](https://github.com/splattner/digitalstrom-vdc-bridge/compare/v0.1.1...v0.1.2) (2026-05-15)
 
 

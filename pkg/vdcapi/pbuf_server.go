@@ -183,6 +183,15 @@ func (s *PbufServer) handleConn(ctx context.Context, conn net.Conn) {
 							"output":    up.Device.Output,
 							"active":    up.Device.Active,
 						})
+						// Vanish first so vdcd/dSS discards any cached configuration
+						// for this device and performs a full getProperty re-query on
+						// the subsequent AnnounceDevice. This is important when
+						// EventInit fires a second time after descriptor metadata has
+						// been pushed (e.g. sensor types after plugin activation).
+						if err := writeFrame(buildPbufVanish(dsuid)); err != nil {
+							_ = conn.Close()
+							return
+						}
 						if err := writeFrame(buildPbufAnnounceDevice(dsuid, s.DSUID)); err != nil {
 							_ = conn.Close()
 							return

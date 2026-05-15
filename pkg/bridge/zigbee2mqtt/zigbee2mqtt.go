@@ -319,7 +319,10 @@ func (p *Plugin) onDevices(_ context.Context, payload []byte) {
 		if bd.IEEE == "" || bd.Disabled || bd.Type == "Coordinator" {
 			continue
 		}
-		eps := bd.endpoints()
+		eps := bd.endpointsWithOpts(endpointOpts{
+			IncludeBattery:     p.cfg.includeBattery,
+			IncludeLinkquality: p.cfg.includeLinkquality,
+		})
 		if len(eps) == 0 {
 			continue
 		}
@@ -412,6 +415,35 @@ func (p *Plugin) activate(sub *deviceSub, dev *discoveredDevice) {
 	sub.subs = subs
 	p.mu.Unlock()
 
+	// Pre-populate sensor / binary-input descriptors for the sensor endpoint
+	// (if this subscription is for it). Descriptors are pushed into the state
+	// store now so the vDSM property tree can serve them before the first
+	// retained state message arrives.
+	if ep, ok := dev.endpoint(sub.epName); ok && (ep.Kind == "sensor" || ep.Kind == "binaryInput") {
+		ctx := context.Background()
+		for _, sf := range ep.SensorFeatures {
+			_ = p.host.SetSensorDescriptor(ctx, sub.mapping.DSUID, sf.Index, bridge.SensorDescriptor{
+				Type:       sf.Meta.Type,
+				Usage:      sf.Meta.Usage,
+				Name:       sf.Meta.Name,
+				Min:        sf.Meta.Min,
+				Max:        sf.Meta.Max,
+				Resolution: sf.Meta.Resolution,
+				SIUnit:     sf.Meta.SIUnit,
+				Symbol:     sf.Meta.Symbol,
+			})
+		}
+		for _, bf := range ep.BinaryFeatures {
+			_ = p.host.SetBinaryInputDescriptor(ctx, sub.mapping.DSUID, bf.Index, bridge.BinaryInputDescriptor{
+				Name:     bf.Property,
+				Function: bf.Function,
+			})
+		}
+		// Trigger a fresh Vanish+AnnounceDevice so vdcd/dSS re-queries all
+		// device properties now that sensor descriptors are available.
+		_ = p.host.ReAnnounce(ctx, sub.mapping.DSUID)
+	}
+
 	logging.Info("zigbee2mqtt_subscribed", logging.Fields{
 		"dsuid":    sub.mapping.DSUID,
 		"ieee":     sub.ieee,
@@ -478,6 +510,30 @@ func (p *Plugin) applyState(sub *deviceSub, dev *discoveredDevice, msg stateMess
 			"mapped": mapped,
 		})
 		p.dispatchButtonAction(ctx, sub, 0, mapped)
+		return
+	}
+
+	// Sensor / binary-input entities: push numeric and boolean readings to the
+	// host. Both sensor features (numeric exposes) and binary features (boolean
+	// exposes) live in the same z2m state message and are dispatched here.
+	if ep.Kind == "sensor" || ep.Kind == "binaryInput" {
+		for _, sf := range ep.SensorFeatures {
+			if v, ok := msg.numberField(sf.Property); ok {
+				_ = p.host.UpdateSensor(ctx, sub.mapping.DSUID, sf.Index, v)
+			}
+		}
+		for _, bf := range ep.BinaryFeatures {
+			if v, ok := msg.boolField(bf.Property); ok {
+				if bf.Invert {
+					v = !v
+				}
+				inputVal := 0.0
+				if v {
+					inputVal = 1.0
+				}
+				_ = p.host.UpdateInput(ctx, sub.mapping.DSUID, bf.Index, inputVal)
+			}
+		}
 		return
 	}
 
@@ -548,8 +604,10 @@ func onOff(b bool) string {
 // ── config ────────────────────────────────────────────────────────────────────
 
 type config struct {
-	broker    string
-	baseTopic string
+	broker             string
+	baseTopic          string
+	includeBattery     bool
+	includeLinkquality bool
 }
 
 func parseConfig(raw map[string]any) (config, error) {
@@ -565,6 +623,12 @@ func parseConfig(raw map[string]any) (config, error) {
 		if v != "" {
 			c.baseTopic = v
 		}
+	}
+	if v, ok := raw["includeBattery"].(bool); ok {
+		c.includeBattery = v
+	}
+	if v, ok := raw["includeLinkquality"].(bool); ok {
+		c.includeLinkquality = v
 	}
 	return c, nil
 }

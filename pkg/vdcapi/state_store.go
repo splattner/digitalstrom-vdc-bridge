@@ -9,21 +9,22 @@ import (
 )
 
 type ExternalDeviceState struct {
-	Key               string
-	UniqueID          string
-	Name              string
-	Output            string
-	Channels          map[int]float64
-	ChannelUpdatedAt  map[int]time.Time
-	Buttons           map[int]float64
-	ButtonUpdatedAt   map[int]time.Time
-	ButtonActions     map[int]string
-	Inputs            map[int]float64
-	InputUpdatedAt    map[int]time.Time
-	Sensors           map[int]float64
-	SensorUpdatedAt   map[int]time.Time
-	SensorDescriptors map[int]runtime.SensorDescriptor
-	Active            bool
+	Key                    string
+	UniqueID               string
+	Name                   string
+	Output                 string
+	Channels               map[int]float64
+	ChannelUpdatedAt       map[int]time.Time
+	Buttons                map[int]float64
+	ButtonUpdatedAt        map[int]time.Time
+	ButtonActions          map[int]string
+	Inputs                 map[int]float64
+	InputUpdatedAt         map[int]time.Time
+	Sensors                map[int]float64
+	SensorUpdatedAt        map[int]time.Time
+	SensorDescriptors      map[int]runtime.SensorDescriptor
+	BinaryInputDescriptors map[int]runtime.BinaryInputDescriptor
+	Active                 bool
 }
 
 type ExternalSnapshot struct {
@@ -198,6 +199,18 @@ func (s *StateStore) HandleEvent(e runtime.Event) {
 			s.devices[key] = d
 			// No push to vDSM needed: descriptors are read on next getProperty.
 		}
+	case runtime.EventBinaryInputDescriptor:
+		if e.BinaryInputDescriptor == nil {
+			break
+		}
+		if key, ok := s.resolveKey(e); ok {
+			d := s.devices[key]
+			if d.BinaryInputDescriptors == nil {
+				d.BinaryInputDescriptors = make(map[int]runtime.BinaryInputDescriptor)
+			}
+			d.BinaryInputDescriptors[e.Index] = *e.BinaryInputDescriptor
+			s.devices[key] = d
+		}
 	case runtime.EventActive:
 		if key, ok := s.resolveKey(e); ok {
 			d := s.devices[key]
@@ -264,6 +277,26 @@ func eventKey(e runtime.Event) string {
 
 func connectionTag(conn, tag string) string {
 	return strings.TrimSpace(conn) + "|" + strings.TrimSpace(tag)
+}
+
+// ReAnnounce broadcasts a StateUpdate{EventInit} for the device identified by
+// uniqueID. This triggers the pbuf_server to re-send Vanish + AnnounceDevice +
+// PushNotification so that vdcd/dSS re-queries all device properties (including
+// sensor descriptions). Call this after pushing descriptors that were not yet
+// available when the device was first announced.
+func (s *StateStore) ReAnnounce(uniqueID string) {
+	uniqueID = strings.TrimSpace(uniqueID)
+	if uniqueID == "" {
+		return
+	}
+	key := "uid:" + uniqueID
+	s.mu.RLock()
+	d, ok := s.devices[key]
+	s.mu.RUnlock()
+	if !ok {
+		return
+	}
+	s.broadcast(StateUpdate{Type: runtime.EventInit, Device: d})
 }
 
 func (s *StateStore) broadcast(update StateUpdate) {

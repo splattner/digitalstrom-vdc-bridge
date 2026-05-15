@@ -36,6 +36,17 @@ type Host interface {
 	// Should be called once per sensor (e.g. on the first state push) so the
 	// vDSM/dSS UI can render the value with the correct label and unit.
 	SetSensorDescriptor(ctx context.Context, dsuid string, sensorIndex int, desc SensorDescriptor) error
+	// UpdateInput pushes a binary input state change for a device.
+	// value 1.0 = active/true, 0.0 = inactive/false.
+	UpdateInput(ctx context.Context, dsuid string, inputIndex int, value float64) error
+	// SetBinaryInputDescriptor publishes metadata (name, sensorFunction) for a binary input.
+	// Should be called once per input so the vDSM/dSS UI classifies the input correctly.
+	SetBinaryInputDescriptor(ctx context.Context, dsuid string, inputIndex int, desc BinaryInputDescriptor) error
+	// ReAnnounce triggers a full device property re-announcement to the vDSM.
+	// Call this after pushing descriptor metadata (sensor types, binary input functions)
+	// that was not yet available when the device was first announced, so the vDSM/dSS
+	// re-queries all configuration properties including descriptions.
+	ReAnnounce(ctx context.Context, dsuid string) error
 	// UpdateActive sets the online/active state of a device.
 	UpdateActive(ctx context.Context, dsuid string, active bool) error
 	// MQTT returns the shared MQTT broker manager. May be nil if the runtime
@@ -50,6 +61,9 @@ type Host interface {
 
 // SensorDescriptor is re-exported from the runtime package for plugin use.
 type SensorDescriptor = runtime.SensorDescriptor
+
+// BinaryInputDescriptor is re-exported from the runtime package for plugin use.
+type BinaryInputDescriptor = runtime.BinaryInputDescriptor
 
 // hostImpl wires bridge callbacks into the shared vdcapi.StateStore.
 type hostImpl struct {
@@ -146,12 +160,38 @@ func (h *hostImpl) SetSensorDescriptor(_ context.Context, dsuid string, sensorIn
 	return nil
 }
 
+func (h *hostImpl) UpdateInput(_ context.Context, dsuid string, inputIndex int, value float64) error {
+	h.state.HandleEvent(runtime.Event{
+		Type:     runtime.EventInput,
+		UniqueID: dsuid,
+		Index:    inputIndex,
+		Value:    value,
+	})
+	return nil
+}
+
+func (h *hostImpl) SetBinaryInputDescriptor(_ context.Context, dsuid string, inputIndex int, desc BinaryInputDescriptor) error {
+	d := desc
+	h.state.HandleEvent(runtime.Event{
+		Type:                  runtime.EventBinaryInputDescriptor,
+		UniqueID:              dsuid,
+		Index:                 inputIndex,
+		BinaryInputDescriptor: &d,
+	})
+	return nil
+}
+
 func (h *hostImpl) UpdateActive(_ context.Context, dsuid string, active bool) error {
 	h.state.HandleEvent(runtime.Event{
 		Type:     runtime.EventActive,
 		UniqueID: dsuid,
 		Active:   active,
 	})
+	return nil
+}
+
+func (h *hostImpl) ReAnnounce(_ context.Context, dsuid string) error {
+	h.state.ReAnnounce(dsuid)
 	return nil
 }
 

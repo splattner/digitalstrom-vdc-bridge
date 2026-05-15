@@ -174,8 +174,21 @@ func buildMovinglightTypeProps(d ExternalDeviceState) outputTypeResult {
 
 func buildSensorTypeProps(dsuid string, d ExternalDeviceState, config *ConfigStore) outputTypeResult {
 	tp := newOutputTypeResult("sensor", "external-sensor")
-	for idx, value := range d.Sensors {
+	// Build the sensor index set from BOTH descriptor metadata and runtime values.
+	// Descriptors are the authoritative count; runtime values arrive later on the
+	// first retained state message. Using only d.Sensors would yield no entries
+	// before any state message arrives, causing dSS to see a single placeholder
+	// sensor with an unknown type.
+	sensorIdxSet := make(map[int]struct{})
+	for idx := range d.SensorDescriptors {
+		sensorIdxSet[idx] = struct{}{}
+	}
+	for idx := range d.Sensors {
+		sensorIdxSet[idx] = struct{}{}
+	}
+	for idx := range sensorIdxSet {
 		key := intKey(idx)
+		value := d.Sensors[idx] // zero until first state message arrives
 		tp.sensorStates[key] = map[string]any{"value": value, "age": sensorAge(d, idx), "error": 0}
 		tp.sensorDescriptions[key] = sensorDescriptionMap(d, idx)
 		tp.sensorSettings[key] = sensorSettingsMap(dsuid, idx, config)
@@ -185,7 +198,45 @@ func buildSensorTypeProps(dsuid string, d ExternalDeviceState, config *ConfigSto
 		tp.sensorStates["0"] = map[string]any{"value": 0.0, "age": 0.0, "error": 0}
 		tp.sensorSettings["0"] = sensorSettingsMap(dsuid, 0, config)
 	}
+	// Also populate any binary inputs on this device (e.g. occupancy alongside
+	// temperature on a combined sensor device). Use the descriptor/runtime union
+	// so inputs declared at activation time are visible before the first state.
+	for idx := range binaryInputIdxSet(d) {
+		populateBinaryInput(tp, d, dsuid, idx, config)
+	}
 	return tp
+}
+
+// binaryInputIdxSet returns the union of binary-input indices declared via
+// descriptors and those that have already received a runtime value.
+func binaryInputIdxSet(d ExternalDeviceState) map[int]struct{} {
+	set := make(map[int]struct{})
+	for idx := range d.BinaryInputDescriptors {
+		set[idx] = struct{}{}
+	}
+	for idx := range d.Inputs {
+		set[idx] = struct{}{}
+	}
+	return set
+}
+
+// populateBinaryInput fills the state/description/settings entries for one
+// binary input index into the given output type result.
+func populateBinaryInput(tp outputTypeResult, d ExternalDeviceState, dsuid string, idx int, config *ConfigStore) {
+	key := intKey(idx)
+	value := d.Inputs[idx] // zero (false) until first state message arrives
+	tp.binaryInputStates[key] = map[string]any{"value": value > 0, "age": inputAge(d, idx), "error": 0}
+	tp.binaryInputDescriptions[key] = binaryInputDescriptionMap(d, dsuid, idx, config)
+	var sf int
+	if desc, ok := d.BinaryInputDescriptors[idx]; ok {
+		sf = desc.Function
+	}
+	if config != nil {
+		if stored := config.GetBinaryInputSettings(dsuid, idx).SensorFunction; stored != 0 {
+			sf = stored
+		}
+	}
+	tp.binaryInputSettings[key] = binaryInputSettingsMap(dsuid, idx, sf, config)
 }
 
 // sensorDescriptionMap returns the sensorDescription entry for one sensor input,
@@ -203,7 +254,7 @@ func sensorDescriptionMap(d ExternalDeviceState, idx int) map[string]any {
 	out := map[string]any{
 		"name":                name,
 		"sensorType":          desc.Type,
-		"sensorUsage":         0,
+		"sensorUsage":         desc.Usage,
 		"min":                 min,
 		"max":                 max,
 		"resolution":          res,
@@ -313,24 +364,13 @@ func buttonSettingsMap(dsuid string, idx int, slp, cp bool, config *ConfigStore)
 
 func buildBinaryInputTypeProps(dsuid string, d ExternalDeviceState, config *ConfigStore) outputTypeResult {
 	tp := newOutputTypeResult("binaryinput", "external-binaryinput")
-	for idx, value := range d.Inputs {
-		key := intKey(idx)
-		tp.binaryInputStates[key] = map[string]any{"value": value > 0, "age": inputAge(d, idx), "error": 0}
-		tp.binaryInputDescriptions[key] = map[string]any{
-			"name": "input", "inputType": 1, "inputUsage": 0,
-			"sensorFunction": 0, "updateInterval": 0.0,
-		}
-		var sf int
-		if config != nil {
-			sf = config.GetBinaryInputSettings(dsuid, idx).SensorFunction
-		}
-		tp.binaryInputSettings[key] = binaryInputSettingsMap(dsuid, idx, sf, config)
+	// Iterate the union of descriptor and runtime indices so inputs declared at
+	// activation time are visible before the first state message arrives.
+	for idx := range binaryInputIdxSet(d) {
+		populateBinaryInput(tp, d, dsuid, idx, config)
 	}
 	if len(tp.binaryInputDescriptions) == 0 {
-		tp.binaryInputDescriptions["0"] = map[string]any{
-			"name": "input", "inputType": 1, "inputUsage": 0,
-			"sensorFunction": 0, "updateInterval": 0.0,
-		}
+		tp.binaryInputDescriptions["0"] = binaryInputDescriptionMap(d, dsuid, 0, config)
 		var sf int
 		if config != nil {
 			sf = config.GetBinaryInputSettings(dsuid, 0).SensorFunction
@@ -339,6 +379,29 @@ func buildBinaryInputTypeProps(dsuid string, d ExternalDeviceState, config *Conf
 		tp.binaryInputStates["0"] = map[string]any{"value": false, "age": 0.0, "error": 0}
 	}
 	return tp
+}
+
+// binaryInputDescriptionMap returns the binaryInputDescription entry for one input,
+// preferring the descriptor pushed by the connector (if any) over defaults.
+func binaryInputDescriptionMap(d ExternalDeviceState, dsuid string, idx int, config *ConfigStore) map[string]any {
+	name := "input"
+	sf := 0
+	if desc, ok := d.BinaryInputDescriptors[idx]; ok {
+		if desc.Name != "" {
+			name = desc.Name
+		}
+		sf = desc.Function
+	}
+	// ConfigStore explicit override takes precedence.
+	if config != nil {
+		if stored := config.GetBinaryInputSettings(dsuid, idx).SensorFunction; stored != 0 {
+			sf = stored
+		}
+	}
+	return map[string]any{
+		"name": name, "inputType": 1, "inputUsage": 0,
+		"sensorFunction": sf, "updateInterval": 0.0,
+	}
 }
 
 // binaryInputSettingsMap renders a binaryInputSettings entry, applying the
@@ -371,18 +434,8 @@ func buildGenericTypeProps(output, dsuid string, d ExternalDeviceState, config *
 		}
 		tp.sensorSettings[key] = sensorSettingsMap(dsuid, idx, config)
 	}
-	for idx, value := range d.Inputs {
-		key := intKey(idx)
-		tp.binaryInputStates[key] = map[string]any{"value": value > 0, "age": inputAge(d, idx), "error": 0}
-		tp.binaryInputDescriptions[key] = map[string]any{
-			"name": "input", "inputType": 1, "inputUsage": 0,
-			"sensorFunction": 0, "updateInterval": 0.0,
-		}
-		var sf int
-		if config != nil {
-			sf = config.GetBinaryInputSettings(dsuid, idx).SensorFunction
-		}
-		tp.binaryInputSettings[key] = binaryInputSettingsMap(dsuid, idx, sf, config)
+	for idx := range binaryInputIdxSet(d) {
+		populateBinaryInput(tp, d, dsuid, idx, config)
 	}
 	for idx, value := range d.Buttons {
 		key := intKey(idx)

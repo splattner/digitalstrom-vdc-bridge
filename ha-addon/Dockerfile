@@ -1,3 +1,8 @@
+# BUILD_FROM is set by the HA supervisor (or by build.yaml / CI) to the
+# architecture-specific base image. Must be declared before any FROM to be
+# usable in a FROM instruction.
+ARG BUILD_FROM=ghcr.io/homeassistant/amd64-base:latest
+
 # ── Stage 1: Build web UI ─────────────────────────────────────────────────────
 FROM node:20-alpine AS web-builder
 WORKDIR /app/web
@@ -21,9 +26,6 @@ RUN go build \
     ./cmd/vdcgo-daemon
 
 # ── Stage 3: Home Assistant base image ───────────────────────────────────────
-# BUILD_FROM is set by the HA supervisor (or by build.yaml / CI) to the
-# architecture-specific base image (e.g. ghcr.io/homeassistant/amd64-base:latest)
-ARG BUILD_FROM=ghcr.io/homeassistant/amd64-base:latest
 FROM ${BUILD_FROM}
 
 COPY --from=go-builder /usr/local/bin/vdcgo-daemon /usr/local/bin/vdcgo-daemon

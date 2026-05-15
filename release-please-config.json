@@ -5,6 +5,19 @@
   "bump-minor-pre-major": true,
   "bump-patch-for-minor-pre-major": true,
   "packages": {
-    ".": {}
+    ".": {
+      "extra-files": [
+        {
+          "type": "json",
+          "path": "web/package.json",
+          "jsonpath": "$.version"
+        },
+        {
+          "type": "yaml",
+          "path": "ha-addon/config.yaml",
+          "jsonpath": "$.version"
+        }
+      ]
+    }
   }
 }

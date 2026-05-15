@@ -75,6 +75,10 @@ func (p *Plugin) Init(ctx context.Context, _ map[string]any, host bridge.Host) e
 	p.scanner = newScanner(
 		func(dev discoveredDevice) { p.onDeviceFound(ctx, dev) },
 		nil,
+		func(err error) {
+			host.Log(bridge.LevelWarn, bridge.CodeEntityError, "WLED mDNS browse error",
+				map[string]any{"error": err.Error()})
+		},
 	)
 	go p.scanner.Run(ctx)
 	logging.Info("wled_plugin_started", logging.Fields{"id": p.id})
@@ -113,6 +117,8 @@ func (p *Plugin) Subscribe(ctx context.Context, m bridge.Mapping) error {
 		p.byMAC[mac] = m.DSUID
 		p.mu.Unlock()
 		logging.Info("wled_subscribe_pending", logging.Fields{"dsuid": m.DSUID, "mac": mac})
+		p.host.Log(bridge.LevelInfo, bridge.CodeSubscribeOK, "subscription registered, waiting for device",
+			map[string]any{"dsuid": m.DSUID, "mac": mac})
 		return nil
 	}
 	return p.startDeviceClient(ctx, m, dev)
@@ -172,6 +178,9 @@ func (p *Plugin) Close() error {
 
 // onDeviceFound is called by the scanner when a new or updated WLED device appears.
 func (p *Plugin) onDeviceFound(ctx context.Context, dev discoveredDevice) {
+	p.host.Log(bridge.LevelInfo, bridge.CodeEntityAdded, "WLED device found via mDNS",
+		map[string]any{"mac": dev.MAC, "name": dev.Name, "addr": dev.Addr, "ver": dev.Ver})
+
 	p.mu.Lock()
 	dsuid, hasSub := p.byMAC[dev.MAC]
 	var sub subscription
@@ -216,6 +225,13 @@ func (p *Plugin) startDeviceClient(ctx context.Context, m bridge.Mapping, dev di
 				"error": err.Error(),
 			})
 		}
+		if s == "connected" {
+			p.host.Log(bridge.LevelInfo, bridge.CodeConnectOK, "WLED device connected",
+				map[string]any{"dsuid": m.DSUID, "mac": dev.MAC, "addr": dev.Addr})
+		} else if s == "disconnected" {
+			p.host.Log(bridge.LevelWarn, bridge.CodeConnectFailed, "WLED device disconnected",
+				map[string]any{"dsuid": m.DSUID, "mac": dev.MAC, "addr": dev.Addr})
+		}
 	}
 
 	p.mu.Lock()
@@ -243,6 +259,8 @@ func (p *Plugin) startDeviceClient(ctx context.Context, m bridge.Mapping, dev di
 		"mac":   dev.MAC,
 		"addr":  dev.Addr,
 	})
+	p.host.Log(bridge.LevelInfo, bridge.CodeSubscribeOK, "device subscribed",
+		map[string]any{"dsuid": m.DSUID, "mac": dev.MAC, "addr": dev.Addr})
 	return nil
 }
 

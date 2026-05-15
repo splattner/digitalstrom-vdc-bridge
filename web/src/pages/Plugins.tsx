@@ -1,12 +1,16 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Plus, Settings2, Trash2, X, FlaskConical } from 'lucide-react'
+import { Plus, Settings2, Trash2, X, FlaskConical, ScrollText } from 'lucide-react'
 import {
   api,
+  connectEvents,
   type ConfigSchema,
+  type LogLevel,
   type Plugin,
+  type PluginEvent,
   type PluginType,
   type PluginConfigResponse,
+  type WsEvent,
 } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { ConfigForm, defaultsForSchema, stripEmptyPasswords } from '@/components/ConfigForm'
@@ -105,7 +109,7 @@ export default function PluginsPage() {
               </tr>
             </thead>
             <tbody>
-              {plugins.map((p) => (
+              {[...plugins].sort((a, b) => a.id.localeCompare(b.id)).map((p) => (
                 <tr key={p.id} className="border-b last:border-0">
                   <td className="px-3 py-2.5 font-mono">{p.id}</td>
                   <td className="px-3 py-2.5 text-muted-foreground">
@@ -145,6 +149,10 @@ export default function PluginsPage() {
             </tbody>
           </table>
         </div>
+      )}
+
+      {plugins && plugins.length > 0 && (
+        <AllLogsPanel plugins={[...plugins].sort((a, b) => a.id.localeCompare(b.id))} />
       )}
 
       {modal.kind === 'add' && (
@@ -442,4 +450,186 @@ function PluginConfigBody({
 }) {
   if (!value) return null
   return <ConfigForm schema={schema} value={value} secrets={response.secrets} onChange={onChange} />
+}
+
+// ── Shared log helpers ─────────────────────────────────────────────────────────
+
+const LOG_LEVELS: LogLevel[] = ['debug', 'info', 'warn', 'error']
+
+function levelOrder(l: LogLevel): number {
+  return LOG_LEVELS.indexOf(l)
+}
+
+function levelBadge(level: LogLevel): string {
+  switch (level) {
+    case 'debug': return 'bg-slate-500/10 text-slate-500 border-slate-500/30'
+    case 'info':  return 'bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/30'
+    case 'warn':  return 'bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/30'
+    case 'error': return 'bg-destructive/10 text-destructive border-destructive/30'
+  }
+}
+
+function formatTime(iso: string): string {
+  try {
+    const d = new Date(iso)
+    return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit', fractionalSecondDigits: 3 })
+  } catch {
+    return iso
+  }
+}
+
+// ── All-plugins log panel ──────────────────────────────────────────────────────
+
+function AllLogsPanel({ plugins }: { plugins: Plugin[] }) {
+  const [events, setEvents] = useState<PluginEvent[]>([])
+  const [levelFilter, setLevelFilter] = useState<LogLevel | ''>('')
+  const [pluginFilter, setPluginFilter] = useState<Set<string>>(new Set())
+  const [autoScroll, setAutoScroll] = useState(true)
+  const bottomRef = useRef<HTMLDivElement>(null)
+  const listRef = useRef<HTMLDivElement>(null)
+
+  // Initial fetch — all plugins
+  const { isLoading, data: initialEvents } = useQuery({
+    queryKey: ['plugin-events-global'],
+    queryFn: () => api.pluginEventsGlobal({ limit: 500 }),
+    staleTime: Infinity,
+    gcTime: 0,
+  })
+
+  useEffect(() => {
+    if (initialEvents) setEvents(initialEvents)
+  }, [initialEvents])
+
+  // WS live streaming — all plugins
+  useEffect(() => {
+    return connectEvents((e: WsEvent) => {
+      if (e.type !== 'pluginEvent') return
+      setEvents((prev) => [...prev, e.data as PluginEvent])
+    })
+  }, [])
+
+  // Auto-scroll
+  useEffect(() => {
+    if (autoScroll && bottomRef.current) {
+      bottomRef.current.scrollIntoView({ behavior: 'smooth' })
+    }
+  }, [events, autoScroll])
+
+  const onScroll = () => {
+    const el = listRef.current
+    if (!el) return
+    setAutoScroll(el.scrollHeight - el.scrollTop - el.clientHeight < 40)
+  }
+
+  function togglePlugin(id: string) {
+    setPluginFilter((s) => {
+      const next = new Set(s)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
+  }
+
+  const displayed = events.filter((ev) => {
+    if (pluginFilter.size > 0 && !pluginFilter.has(ev.pluginId)) return false
+    if (levelFilter && levelOrder(ev.level) < levelOrder(levelFilter as LogLevel)) return false
+    return true
+  })
+
+  return (
+    <div className="border rounded-lg overflow-hidden flex flex-col" style={{ height: '26rem' }}>
+      {/* toolbar */}
+      <div className="flex items-center gap-2 px-3 py-2 border-b bg-muted/30 shrink-0 flex-wrap">
+        <ScrollText className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+        <span className="text-xs font-semibold mr-1">Logs</span>
+        {plugins.map((p) => (
+          <button
+            key={p.id}
+            type="button"
+            onClick={() => togglePlugin(p.id)}
+            className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs transition-colors ${
+              pluginFilter.has(p.id)
+                ? 'border-primary bg-primary text-primary-foreground'
+                : 'border-border bg-background hover:bg-muted text-muted-foreground'
+            }`}
+          >
+            {p.id}
+          </button>
+        ))}
+        <div className="flex-1" />
+        <select
+          className="text-xs border rounded px-1.5 py-0.5 bg-background"
+          value={levelFilter}
+          onChange={(e) => setLevelFilter(e.target.value as LogLevel | '')}
+          title="Minimum log level"
+        >
+          <option value="">all levels</option>
+          {LOG_LEVELS.map((l) => (
+            <option key={l} value={l}>{l}+</option>
+          ))}
+        </select>
+        <span className="text-xs text-muted-foreground tabular-nums w-16 text-right">{displayed.length} events</span>
+        {autoScroll ? (
+          <span className="text-xs text-emerald-600 dark:text-emerald-400">● live</span>
+        ) : (
+          <button
+            type="button"
+            className="text-xs underline text-muted-foreground hover:text-foreground"
+            onClick={() => {
+              setAutoScroll(true)
+              bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+            }}
+          >
+            ↓ bottom
+          </button>
+        )}
+      </div>
+
+      {/* log list */}
+      <div
+        ref={listRef}
+        onScroll={onScroll}
+        className="flex-1 overflow-y-auto font-mono text-xs leading-relaxed"
+      >
+        {isLoading ? (
+          <p className="text-muted-foreground p-4">Loading…</p>
+        ) : displayed.length === 0 ? (
+          <p className="text-muted-foreground p-4">No events yet.</p>
+        ) : (
+          <table className="w-full border-collapse">
+            <tbody>
+              {displayed.map((ev) => (
+                <tr key={ev.seq} className="border-b border-border/40 hover:bg-muted/30">
+                  <td className="px-3 py-1 whitespace-nowrap text-muted-foreground w-28">
+                    {formatTime(ev.time)}
+                  </td>
+                  <td className="px-1 py-1 w-14">
+                    <span className={`inline-flex items-center rounded border px-1.5 py-px text-[10px] font-semibold uppercase tracking-wide ${levelBadge(ev.level)}`}>
+                      {ev.level}
+                    </span>
+                  </td>
+                  <td className="px-2 py-1 text-muted-foreground whitespace-nowrap w-28 font-sans">
+                    {ev.pluginId}
+                  </td>
+                  <td className="px-2 py-1 text-muted-foreground whitespace-nowrap w-40">
+                    {ev.code}
+                  </td>
+                  <td className="px-2 py-1 break-all">
+                    {ev.message}
+                    {ev.fields && Object.keys(ev.fields).length > 0 && (
+                      <span className="text-muted-foreground ml-2">
+                        {Object.entries(ev.fields)
+                          .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
+                          .join(' ')}
+                      </span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        <div ref={bottomRef} />
+      </div>
+    </div>
+  )
 }

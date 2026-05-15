@@ -34,6 +34,10 @@ type Config struct {
 	// Bridges is the bridge plugin registry, used by /api/plugins and /api/bridges.
 	// May be nil; those endpoints will return empty results.
 	Bridges *bridge.Registry
+	// EventBuffer is the plugin event ring buffer. If set, its live subscription
+	// is forwarded to WebSocket clients as {type:"pluginEvent", ...} messages.
+	// May be nil; plugin event endpoints will return empty results.
+	EventBuffer *bridge.EventBuffer
 
 	// Runtime metadata exposed by /api/settings (optional).
 	VdcAPIPort  int
@@ -95,6 +99,37 @@ func (s *Server) Handler() http.Handler {
 func (s *Server) Run(ctx context.Context) error {
 	go s.hub.run(ctx)
 	go s.debugHub.run(ctx)
+
+	// Fan plugin events from the ring buffer's live channel to WebSocket clients.
+	if s.cfg.EventBuffer != nil {
+		go func() {
+			ch, cancel := s.cfg.EventBuffer.Subscribe()
+			defer cancel()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case ev, ok := <-ch:
+					if !ok {
+						return
+					}
+					s.hub.broadcast(wsEvent{
+						Type:  "pluginEvent",
+						DSUID: ev.PluginID,
+						Data: map[string]any{
+							"seq":      ev.Seq,
+							"time":     ev.Time,
+							"pluginId": ev.PluginID,
+							"level":    ev.Level,
+							"code":     ev.Code,
+							"message":  ev.Message,
+							"fields":   ev.Fields,
+						},
+					})
+				}
+			}
+		}()
+	}
 
 	ln, err := net.Listen("tcp", s.cfg.Listen)
 	if err != nil {
@@ -167,11 +202,14 @@ func (s *Server) buildRouter() chi.Router {
 	r.Put("/api/plugins/{id}/config", s.handlePluginConfigUpdate)
 	r.Post("/api/plugins/{id}/probe", s.handlePluginProbe)
 	r.Get("/api/plugins/{id}/discovered", s.handlePluginDiscovered)
+	r.Get("/api/plugins/{id}/events", s.handlePluginEvents)
+	r.Delete("/api/plugins/{id}/events", s.handleClearPluginEvents)
 	r.Get("/api/plugin-types", s.handlePluginTypes)
 	r.Post("/api/plugin-types/{type}/probe", s.handlePluginTypeProbe)
 	r.Get("/api/bridges", s.handleBridges)
 	r.Post("/api/bridges", s.handleCreateBridge)
 	r.Delete("/api/bridges/{dsuid}", s.handleDeleteBridge)
+	r.Get("/api/plugin-events", s.handlePluginEventsGlobal)
 
 	// Settings endpoints
 	r.Get("/api/settings", s.handleSettings)

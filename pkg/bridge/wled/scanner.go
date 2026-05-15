@@ -31,13 +31,15 @@ type scanner struct {
 	devices map[string]discoveredDevice // mac → device
 	onFound func(discoveredDevice)
 	onLost  func(mac string) // called when a previously-seen device is no longer responding (best-effort, not reliable with zeroconf)
+	onError func(error)      // called on scanner-level errors (best-effort; nil is fine)
 }
 
-func newScanner(onFound func(discoveredDevice), onLost func(string)) *scanner {
+func newScanner(onFound func(discoveredDevice), onLost func(string), onError func(error)) *scanner {
 	return &scanner{
 		devices: make(map[string]discoveredDevice),
 		onFound: onFound,
 		onLost:  onLost,
+		onError: onError,
 	}
 }
 
@@ -49,6 +51,9 @@ func (s *scanner) Run(ctx context.Context) {
 		}
 		if err := s.browse(ctx); err != nil && ctx.Err() == nil {
 			logging.Warn("wled_mdns_error", logging.Fields{"error": err.Error()})
+			if s.onError != nil {
+				s.onError(err)
+			}
 		}
 		select {
 		case <-ctx.Done():

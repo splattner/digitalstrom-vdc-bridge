@@ -283,6 +283,8 @@ func (p *Plugin) onDevices(_ context.Context, payload []byte) {
 	var arr []bridgeDevice
 	if err := json.Unmarshal(payload, &arr); err != nil {
 		logging.Warn("zigbee2mqtt_devices_parse", logging.Fields{"error": err.Error()})
+		p.host.Log(bridge.LevelWarn, bridge.CodeEntityError, "failed to parse zigbee2mqtt devices payload",
+			map[string]any{"error": err.Error()})
 		return
 	}
 	seen := make(map[string]struct{}, len(arr))
@@ -322,6 +324,8 @@ func (p *Plugin) onDevices(_ context.Context, payload []byte) {
 		logging.Info("zigbee2mqtt_devices_updated", logging.Fields{
 			"added": added, "total": len(seen),
 		})
+		p.host.Log(bridge.LevelInfo, bridge.CodeEntityAdded, "discovered devices updated",
+			map[string]any{"added": added, "total": len(seen)})
 	}
 	for _, sub := range pending {
 		dev := p.devices[sub.ieee]
@@ -351,6 +355,8 @@ func (p *Plugin) activate(sub *deviceSub, dev *discoveredDevice) {
 		logging.Warn("zigbee2mqtt_state_subscribe", logging.Fields{
 			"topic": stateTopic, "error": err.Error(),
 		})
+		p.host.Log(bridge.LevelWarn, bridge.CodeSubscribeFailed, "failed to subscribe to zigbee2mqtt state topic",
+			map[string]any{"dsuid": sub.mapping.DSUID, "ieee": sub.ieee, "topic": stateTopic, "error": err.Error()})
 	}
 
 	// Availability is optional in z2m. Subscribing to a non-existent topic is
@@ -381,6 +387,8 @@ func (p *Plugin) activate(sub *deviceSub, dev *discoveredDevice) {
 		"endpoint": sub.epName,
 		"topic":    stateTopic,
 	})
+	p.host.Log(bridge.LevelInfo, bridge.CodeSubscribeOK, "device subscribed",
+		map[string]any{"dsuid": sub.mapping.DSUID, "ieee": sub.ieee, "endpoint": sub.epName})
 }
 
 // applyState forwards a state JSON to the host's channel/active state.

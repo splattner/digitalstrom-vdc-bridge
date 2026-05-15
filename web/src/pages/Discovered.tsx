@@ -16,7 +16,7 @@ interface Row extends DiscoveredEntity {
   pluginStatus: string
 }
 
-type SortKey = 'name' | 'plugin' | 'kind' | 'mapped'
+type SortKey = 'name' | 'remoteId' | 'plugin' | 'kind' | 'mapped'
 type SortDir = 'asc' | 'desc'
 
 const KIND_ORDER: Record<string, number> = {
@@ -151,7 +151,6 @@ export default function DiscoveredPage() {
 
   // ── Filters / sort state ─────────────────────────────────────────────────
   const [query, setQuery] = useState('')
-  const [showRemoteId, setShowRemoteId] = useState(false)
   const [pluginFilter, setPluginFilter] = useState<Set<string>>(new Set())
   const [kindFilter, setKindFilter] = useState<Set<string>>(new Set())
   const [areaFilter, setAreaFilter] = useState<Set<string>>(new Set())
@@ -199,6 +198,7 @@ export default function DiscoveredPage() {
     list.sort((a, b) => {
       switch (sort.key) {
         case 'name':   return a.name.localeCompare(b.name) * dir
+        case 'remoteId': return a.id.localeCompare(b.id) * dir
         case 'plugin': return (a.pluginId.localeCompare(b.pluginId) || a.name.localeCompare(b.name)) * dir
         case 'kind': {
           const ak = KIND_ORDER[a.kind] ?? 99
@@ -269,7 +269,7 @@ export default function DiscoveredPage() {
 
       {/* Toolbar */}
       <div className="rounded-lg border bg-card/30 p-3 space-y-2.5">
-        {/* Row 1: search + status segmented control + remote-id toggle */}
+        {/* Row 1: search + status segmented control */}
         <div className="flex flex-wrap items-center gap-2">
           <div className="relative flex-1 min-w-[200px]">
             <Search className="absolute left-2 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
@@ -310,16 +310,6 @@ export default function DiscoveredPage() {
               </button>
             ))}
           </div>
-
-          <label className="inline-flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer select-none">
-            <input
-              type="checkbox"
-              checked={showRemoteId}
-              onChange={(e) => setShowRemoteId(e.target.checked)}
-              className="accent-primary"
-            />
-            show remote id
-          </label>
 
           {filtersActive && (
             <button
@@ -412,6 +402,7 @@ export default function DiscoveredPage() {
             <colgroup>
               <col className="w-7" />
               <col />
+              <col className="w-56" />
               <col className="w-36 hidden sm:table-column" />
               <col className="w-28" />
               <col className="w-28" />
@@ -420,6 +411,7 @@ export default function DiscoveredPage() {
               <tr className="border-b bg-muted/50">
                 <th className="px-2 py-2" />
                 <SortHeader label="Name" columnKey="name" sort={sort} setSort={setSort} />
+                <SortHeader label="Remote ID" columnKey="remoteId" sort={sort} setSort={setSort} />
                 <SortHeader label="Plugin" columnKey="plugin" sort={sort} setSort={setSort} className="hidden sm:table-cell" />
                 <SortHeader label="Kind" columnKey="kind" sort={sort} setSort={setSort} />
                 <th className="px-3 py-2 text-right font-medium text-muted-foreground">Action</th>
@@ -472,11 +464,11 @@ export default function DiscoveredPage() {
                           </div>
                         )
                       })()}
-                      {showRemoteId && (
-                        <div className="font-mono text-[10.5px] text-muted-foreground truncate" title={r.id}>
-                          {r.id}
-                        </div>
-                      )}
+                    </td>
+                    <td className="px-3 py-2">
+                      <div className="font-mono text-[11px] text-muted-foreground truncate" title={r.id}>
+                        {r.id}
+                      </div>
                     </td>
                     <td className="px-3 py-2 hidden sm:table-cell">
                       <span

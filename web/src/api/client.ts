@@ -142,6 +142,18 @@ export interface ForgetVdsmResponse {
   cleared: number
 }
 
+export type LogLevel = 'debug' | 'info' | 'warn' | 'error'
+
+export interface PluginEvent {
+  seq: number
+  time: string
+  pluginId: string
+  level: LogLevel
+  code: string
+  message: string
+  fields?: Record<string, unknown>
+}
+
 const BASE = '/api'
 
 async function get<T>(path: string): Promise<T> {
@@ -177,6 +189,23 @@ export const api = {
   settings: () => get<SettingsInfo>('/settings'),
   forgetVdsm: () => postJSON<ForgetVdsmResponse>('/settings/forget-vdsm', {}),
   exportConfigUrl: () => `${BASE}/settings/export`,
+  pluginEvents: (id: string, opts?: { since?: number; level?: string; limit?: number }) => {
+    const p = new URLSearchParams()
+    if (opts?.since) p.set('since', String(opts.since))
+    if (opts?.level) p.set('level', opts.level)
+    if (opts?.limit) p.set('limit', String(opts.limit))
+    const qs = p.toString()
+    return get<PluginEvent[]>(`/plugins/${encodeURIComponent(id)}/events${qs ? `?${qs}` : ''}`)
+  },
+  clearPluginEvents: (id: string) => del(`/plugins/${encodeURIComponent(id)}/events`),
+  pluginEventsGlobal: (opts?: { since?: number; level?: string; limit?: number }) => {
+    const p = new URLSearchParams()
+    if (opts?.since) p.set('since', String(opts.since))
+    if (opts?.level) p.set('level', opts.level)
+    if (opts?.limit) p.set('limit', String(opts.limit))
+    const qs = p.toString()
+    return get<PluginEvent[]>(`/plugin-events${qs ? `?${qs}` : ''}`)
+  },
 }
 
 async function postJSON<T>(path: string, body: unknown): Promise<T> {

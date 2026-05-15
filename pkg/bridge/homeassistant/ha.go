@@ -96,8 +96,24 @@ func (p *Plugin) Init(ctx context.Context, cfg map[string]any, host bridge.Host)
 	p.client = newWSClient(url, token)
 	p.client.onSnapshot = p.handleSnapshot
 	p.client.onStateChange = p.handleStateChange
-	p.client.onStatus = func(s string) { p.statusVal.Store(s) }
+	p.client.onStatus = func(s string) {
+		p.statusVal.Store(s)
+		switch s {
+		case "connected":
+			host.Log(bridge.LevelInfo, bridge.CodeConnectOK, "connected to Home Assistant",
+				map[string]any{"url": url})
+		case "auth_failed":
+			host.Log(bridge.LevelError, bridge.CodeAuthFailed, "Home Assistant authentication failed",
+				map[string]any{"url": url})
+		case "reconnecting":
+			host.Log(bridge.LevelWarn, bridge.CodeConnectFailed, "reconnecting to Home Assistant",
+				map[string]any{"url": url})
+		}
+	}
 	p.client.onRegistries = p.handleRegistries
+	p.client.onWarn = func(code, message string, fields map[string]any) {
+		host.Log(bridge.LevelWarn, code, message, fields)
+	}
 
 	go p.client.Run(ctx)
 	logging.Info("ha_plugin_started", logging.Fields{"id": p.id, "url": url})
@@ -141,6 +157,9 @@ func (p *Plugin) Subscribe(ctx context.Context, m bridge.Mapping) error {
 	p.subByEntity[m.RemoteEntityID] = m.DSUID
 	state, hasState := p.latestStates[m.RemoteEntityID]
 	p.mu.Unlock()
+
+	p.host.Log(bridge.LevelInfo, bridge.CodeSubscribeOK, "entity subscribed",
+		map[string]any{"dsuid": m.DSUID, "entity_id": m.RemoteEntityID})
 
 	if hasState {
 		p.pushState(ctx, m, state)
@@ -266,6 +285,12 @@ func (p *Plugin) handleRegistries(regs haRegistries) {
 func (p *Plugin) handleSnapshot(snap map[string]haEntity) {
 	p.mu.Lock()
 	p.latestStates = snap
+	visible := 0
+	for _, e := range snap {
+		if classifyEntity(e) != "" {
+			visible++
+		}
+	}
 	// Take a copy of the subscriptions so we can release the lock before
 	// invoking Host callbacks.
 	subs := make([]bridge.Mapping, 0, len(p.subscribed))
@@ -273,6 +298,9 @@ func (p *Plugin) handleSnapshot(snap map[string]haEntity) {
 		subs = append(subs, m)
 	}
 	p.mu.Unlock()
+
+	p.host.Log(bridge.LevelInfo, bridge.CodeDiscoveryDone, "HA state snapshot received",
+		map[string]any{"total": len(snap), "visible": visible})
 
 	ctx := context.Background()
 	for _, m := range subs {
@@ -284,10 +312,23 @@ func (p *Plugin) handleSnapshot(snap map[string]haEntity) {
 
 // handleStateChange updates the cache and forwards the new state if a mapping exists.
 func (p *Plugin) handleStateChange(sc stateChange) {
+	// Removal: HA fires state_changed with new_state=nil when an entity is
+	// deleted (e.g. integration removed). Surface as entity_removed so the
+	// operator can see vanishing devices in the Logs drawer.
 	if sc.NewState == nil {
+		p.mu.Lock()
+		_, existed := p.latestStates[sc.EntityID]
+		delete(p.latestStates, sc.EntityID)
+		p.mu.Unlock()
+		if existed {
+			p.host.Log(bridge.LevelInfo, bridge.CodeEntityRemoved, "HA entity removed",
+				map[string]any{"entity_id": sc.EntityID})
+		}
 		return
 	}
+
 	p.mu.Lock()
+	_, existed := p.latestStates[sc.EntityID]
 	p.latestStates[sc.EntityID] = *sc.NewState
 	dsuid, hasSub := p.subByEntity[sc.EntityID]
 	var m bridge.Mapping
@@ -295,6 +336,21 @@ func (p *Plugin) handleStateChange(sc stateChange) {
 		m = p.subscribed[dsuid]
 	}
 	p.mu.Unlock()
+
+	// Newly-appearing entity (HA fires new_state set + old_state=nil when an
+	// integration adds a brand-new entity after our initial snapshot). Only
+	// log it if we'd actually classify it as a bridgeable device — otherwise
+	// every weather/sun/script entity would spam the log.
+	if !existed && sc.OldState == nil {
+		if classifyEntity(*sc.NewState) != "" {
+			p.host.Log(bridge.LevelInfo, bridge.CodeEntityAdded, "HA entity appeared",
+				map[string]any{
+					"entity_id": sc.EntityID,
+					"kind":      classifyEntity(*sc.NewState),
+					"state":     sc.NewState.State,
+				})
+		}
+	}
 
 	if hasSub {
 		p.pushState(context.Background(), m, *sc.NewState)

@@ -1,10 +1,15 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  ArrowDownUp, ArrowDown, ArrowUp, CheckCircle2, Circle, Search, X,
+  ArrowDownUp, ArrowDown, ArrowUp, Search, X,
+  Activity, Antenna, BatteryMedium, Bell, ChevronDown, ChevronLeft, ChevronRight,
+  CircleDot, Droplet, Gauge,
+  Layers, Lightbulb, Link2, Link2Off, Palette, Plug, ScrollText, Sparkles, Sun,
+  Thermometer, ToggleLeft, Unlink, Wifi, WifiOff, Zap,
 } from 'lucide-react'
 import {
-  api, type DiscoveredEntity, type Plugin,
+  api, connectEvents,
+  type DiscoveredEntity, type Plugin, type PluginEvent, type WsEvent,
 } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { useToasts } from '@/lib/toasts'
@@ -22,6 +27,8 @@ type SortDir = 'asc' | 'desc'
 const KIND_ORDER: Record<string, number> = {
   colorlight: 0, dimmer: 1, light: 2, sensor: 3, binary: 4,
 }
+
+const ROW_KEY = (r: Pick<Row, 'pluginId' | 'id'>) => `${r.pluginId}\u0000${r.id}`
 
 // ── Visual helpers ────────────────────────────────────────────────────────────
 
@@ -46,6 +53,37 @@ function pluginBadge(status: string): string {
     return 'bg-destructive/10 text-destructive border-destructive/30'
   }
   return 'bg-muted text-muted-foreground border-border'
+}
+
+// Icon picked from kind, refined with light keyword sniffing on entity-id /
+// attributes (used for the sensor sub-types). The colour matches the kind.
+function deviceIconFor(kind: string, id: string, attrs?: Record<string, unknown>):
+  { Icon: typeof Lightbulb; tone: string } {
+  const tone = ((): string => {
+    switch (kind) {
+      case 'colorlight': return 'bg-fuchsia-500/10 text-fuchsia-600 dark:text-fuchsia-400'
+      case 'dimmer':     return 'bg-amber-500/10 text-amber-600 dark:text-amber-400'
+      case 'light':      return 'bg-yellow-500/10 text-yellow-600 dark:text-yellow-400'
+      case 'sensor':     return 'bg-sky-500/10 text-sky-600 dark:text-sky-400'
+      case 'binary':     return 'bg-slate-500/10 text-slate-600 dark:text-slate-400'
+      default:           return 'bg-muted text-muted-foreground'
+    }
+  })()
+  if (kind === 'colorlight') return { Icon: Palette, tone }
+  if (kind === 'dimmer' || kind === 'light') return { Icon: Lightbulb, tone }
+  if (kind === 'binary') return { Icon: ToggleLeft, tone }
+  if (kind === 'sensor') {
+    const hay = (id + ' ' + Object.values(attrs ?? {}).join(' ')).toLowerCase()
+    if (/battery|batt/.test(hay)) return { Icon: BatteryMedium, tone }
+    if (/motion|occupancy|presence|pir/.test(hay)) return { Icon: Activity, tone }
+    if (/temp/.test(hay)) return { Icon: Thermometer, tone }
+    if (/humid/.test(hay)) return { Icon: Droplet, tone }
+    if (/power|energy|watt|consumption/.test(hay)) return { Icon: Zap, tone }
+    if (/illum|lux|light_level/.test(hay)) return { Icon: Sun, tone }
+    if (/door|window|contact|open/.test(hay)) return { Icon: Bell, tone }
+    return { Icon: Gauge, tone }
+  }
+  return { Icon: CircleDot, tone }
 }
 
 // ── Toolbar pieces ────────────────────────────────────────────────────────────
@@ -99,6 +137,138 @@ function SortHeader({
   )
 }
 
+// ── KPI card ──────────────────────────────────────────────────────────────────
+
+function KpiCard({
+  label, value, hint, Icon, tone, accent,
+}: {
+  label: string
+  value: number | string
+  hint?: string
+  Icon: typeof Lightbulb
+  tone: string
+  /** Tailwind border-color class for the left accent stripe, e.g. 'border-l-sky-500'. */
+  accent: string
+}) {
+  return (
+    <div
+      className={`relative overflow-hidden rounded-lg border border-l-4 ${accent} bg-card px-3 py-2.5 flex items-center gap-3`}
+    >
+      {/* Faded background icon */}
+      <Icon
+        aria-hidden
+        className={`absolute -right-2 -bottom-2 size-14 opacity-[0.06] ${tone.split(' ').filter((c) => c.startsWith('text-')).join(' ')}`}
+      />
+      <div className={`shrink-0 rounded-md p-1.5 ${tone}`}>
+        <Icon className="size-4" />
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="text-[10px] uppercase tracking-wider text-muted-foreground leading-none">{label}</div>
+        <div className="mt-0.5 text-2xl font-semibold tabular-nums leading-none">{value}</div>
+        {hint && (
+          <div className="mt-1 text-[11px] text-muted-foreground truncate leading-none">{hint}</div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ── Recent activity ───────────────────────────────────────────────────────────
+
+const ACTIVITY_CODES = new Set<string>([
+  'entity_added', 'entity_removed',
+  'mapping_added', 'mapping_removed',
+  'discovery_completed',
+  'connect_ok', 'connect_failed', 'auth_failed',
+])
+
+function activityIcon(code: string): { Icon: typeof Lightbulb; tone: string } {
+  switch (code) {
+    case 'entity_added':         return { Icon: Sparkles,   tone: 'text-blue-500' }
+    case 'entity_removed':       return { Icon: X,          tone: 'text-muted-foreground' }
+    case 'mapping_added':        return { Icon: Link2,      tone: 'text-emerald-500' }
+    case 'mapping_removed':      return { Icon: Link2Off,   tone: 'text-amber-500' }
+    case 'discovery_completed':  return { Icon: Antenna,    tone: 'text-sky-500' }
+    case 'connect_ok':           return { Icon: Wifi,       tone: 'text-emerald-500' }
+    case 'connect_failed':       return { Icon: WifiOff,    tone: 'text-destructive' }
+    case 'auth_failed':          return { Icon: WifiOff,    tone: 'text-destructive' }
+    default:                     return { Icon: ScrollText, tone: 'text-muted-foreground' }
+  }
+}
+
+function relTime(iso: string): string {
+  const t = new Date(iso).getTime()
+  if (Number.isNaN(t)) return ''
+  const diff = Math.max(0, Date.now() - t)
+  if (diff < 5_000) return 'just now'
+  if (diff < 60_000) return `${Math.floor(diff / 1000)}s ago`
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`
+  return `${Math.floor(diff / 86_400_000)}d ago`
+}
+
+function RecentActivity() {
+  const [events, setEvents] = useState<PluginEvent[]>([])
+  // tick once a minute so "Xm ago" labels update without new events
+  const [, forceTick] = useState(0)
+  useEffect(() => {
+    const t = setInterval(() => forceTick((n) => (n + 1) % 1_000_000), 30_000)
+    return () => clearInterval(t)
+  }, [])
+
+  const { data: initial } = useQuery({
+    queryKey: ['plugin-events-global', 'recent'],
+    queryFn: () => api.pluginEventsGlobal({ limit: 100 }),
+    staleTime: 60_000,
+  })
+  useEffect(() => {
+    if (!initial) return
+    setEvents(initial.filter((e) => ACTIVITY_CODES.has(e.code)))
+  }, [initial])
+
+  useEffect(() => {
+    return connectEvents((e: WsEvent) => {
+      if (e.type !== 'pluginEvent') return
+      const ev = e.data as PluginEvent
+      if (!ACTIVITY_CODES.has(ev.code)) return
+      setEvents((prev) => [...prev, ev].slice(-50))
+    })
+  }, [])
+
+  const last = useMemo(() => events.slice(-6).reverse(), [events])
+
+  return (
+    <div className="rounded-lg border bg-card p-3 flex flex-col min-h-0">
+      <div className="flex items-center gap-2 mb-2 shrink-0">
+        <Activity className="size-3.5 text-muted-foreground" />
+        <span className="text-[11px] uppercase tracking-wider text-muted-foreground">Recent activity</span>
+      </div>
+      {last.length === 0 ? (
+        <p className="text-xs text-muted-foreground">No recent events.</p>
+      ) : (
+        <ul className="space-y-1.5 overflow-hidden">
+          {last.map((ev) => {
+            const { Icon, tone } = activityIcon(ev.code)
+            return (
+              <li key={ev.seq} className="flex items-start gap-2 text-xs leading-snug">
+                <Icon className={`size-3.5 shrink-0 mt-0.5 ${tone}`} />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate" title={ev.message}>{ev.message}</div>
+                  <div className="text-[10px] text-muted-foreground truncate">
+                    <span className="font-mono">{ev.pluginId}</span>
+                    <span className="mx-1">·</span>
+                    <span>{relTime(ev.time)}</span>
+                  </div>
+                </div>
+              </li>
+            )
+          })}
+        </ul>
+      )}
+    </div>
+  )
+}
+
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function DiscoveredPage() {
@@ -149,13 +319,19 @@ export default function DiscoveredPage() {
     return out
   }, [plugins, discoveredQueries])
 
-  // ── Filters / sort state ─────────────────────────────────────────────────
+  // ── Filters / sort / selection state ─────────────────────────────────────
   const [query, setQuery] = useState('')
   const [pluginFilter, setPluginFilter] = useState<Set<string>>(new Set())
   const [kindFilter, setKindFilter] = useState<Set<string>>(new Set())
   const [areaFilter, setAreaFilter] = useState<Set<string>>(new Set())
   const [statusFilter, setStatusFilter] = useState<'all' | 'mapped' | 'unmapped'>('all')
   const [sort, setSort] = useState<{ key: SortKey; dir: SortDir }>({ key: 'name', dir: 'asc' })
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [groupBy, setGroupBy] = useState<'none' | 'plugin' | 'kind'>('none')
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  const [confirmUnbridgeOpen, setConfirmUnbridgeOpen] = useState(false)
+  const [page, setPage] = useState(0)
+  const [pageSize, setPageSize] = useState<number>(50)
 
   // ── Counts (computed from the unfiltered set, for chip badges) ───────────
   const counts = useMemo(() => {
@@ -174,6 +350,11 @@ export default function DiscoveredPage() {
     }
     return { byPlugin, byKind, byArea, mapped, total: rows.length, unmapped: rows.length - mapped }
   }, [rows])
+
+  const pluginsConnected = useMemo(
+    () => (plugins ?? []).filter((p) => p.status.toLowerCase() === 'connected').length,
+    [plugins],
+  )
 
   // ── Filter + sort pipeline ───────────────────────────────────────────────
   const filtered = useMemo(() => {
@@ -214,6 +395,23 @@ export default function DiscoveredPage() {
     return list
   }, [rows, query, pluginFilter, kindFilter, areaFilter, statusFilter, sort])
 
+  // Drop selections that are no longer visible (e.g. filter changed, row gone).
+  useEffect(() => {
+    if (selected.size === 0) return
+    const visible = new Set(filtered.map(ROW_KEY))
+    let changed = false
+    const next = new Set<string>()
+    for (const k of selected) {
+      if (visible.has(k)) next.add(k); else changed = true
+    }
+    if (changed) setSelected(next)
+  }, [filtered, selected])
+
+  // Reset to page 1 when the visible set changes meaningfully.
+  useEffect(() => {
+    setPage(0)
+  }, [query, pluginFilter, kindFilter, areaFilter, statusFilter, groupBy, pageSize, sort.key, sort.dir])
+
   // ── Mutations ────────────────────────────────────────────────────────────
   const createMut = useMutation({
     mutationFn: api.createBridge,
@@ -236,6 +434,110 @@ export default function DiscoveredPage() {
     onError: (e: unknown) =>
       pushToast(`Un-bridge failed: ${e instanceof Error ? e.message : String(e)}`, 'error'),
   })
+
+  // Bulk worker — runs sequentially so we never overwhelm a plugin.
+  const [bulkBusy, setBulkBusy] = useState(false)
+
+  async function bulkBridge() {
+    const targets = filtered.filter((r) => selected.has(ROW_KEY(r)) && !r.mapped)
+    if (targets.length === 0) return
+    setBulkBusy(true)
+    let ok = 0, fail = 0
+    for (const r of targets) {
+      try {
+        await api.createBridge({
+          pluginId: r.pluginId, remoteEntityId: r.id, name: r.name, kind: r.kind,
+        })
+        ok++
+      } catch {
+        fail++
+      }
+    }
+    setBulkBusy(false)
+    setSelected(new Set())
+    void qc.invalidateQueries({ queryKey: ['discovered'] })
+    void qc.invalidateQueries({ queryKey: ['bridges'] })
+    void qc.invalidateQueries({ queryKey: ['devices'] })
+    pushToast(
+      fail === 0 ? `Bridged ${ok} ${ok === 1 ? 'entity' : 'entities'}`
+                 : `Bridged ${ok}, ${fail} failed`,
+      fail === 0 ? 'success' : 'error',
+    )
+  }
+
+  function bulkUnbridge() {
+    const count = filtered.filter((r) => selected.has(ROW_KEY(r)) && r.mapped).length
+    if (count === 0) return
+    setConfirmUnbridgeOpen(true)
+  }
+
+  function toggleExpanded(key: string) {
+    setExpanded((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key); else next.add(key)
+      return next
+    })
+  }
+
+  async function executeBulkUnbridge() {
+    const targets = filtered.filter((r) => selected.has(ROW_KEY(r)) && r.mapped)
+    if (targets.length === 0) return
+    setBulkBusy(true)
+    let ok = 0, fail = 0
+    for (const r of targets) {
+      const dsuid = dsuidByRemote.get(ROW_KEY(r))
+      if (!dsuid) { fail++; continue }
+      try {
+        await api.deleteBridge(dsuid)
+        ok++
+      } catch {
+        fail++
+      }
+    }
+    setBulkBusy(false)
+    setSelected(new Set())
+    setConfirmUnbridgeOpen(false)
+    void qc.invalidateQueries({ queryKey: ['discovered'] })
+    void qc.invalidateQueries({ queryKey: ['bridges'] })
+    void qc.invalidateQueries({ queryKey: ['devices'] })
+    pushToast(
+      fail === 0 ? `Un-bridged ${ok} ${ok === 1 ? 'entity' : 'entities'}`
+                 : `Un-bridged ${ok}, ${fail} failed`,
+      fail === 0 ? 'success' : 'error',
+    )
+  }
+
+  // ── Selection helpers ────────────────────────────────────────────────────
+  const visibleKeys = useMemo(() => filtered.map(ROW_KEY), [filtered])
+  const allVisibleSelected = visibleKeys.length > 0 && visibleKeys.every((k) => selected.has(k))
+  const someVisibleSelected = !allVisibleSelected && visibleKeys.some((k) => selected.has(k))
+
+  function toggleAllVisible() {
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (allVisibleSelected) {
+        for (const k of visibleKeys) next.delete(k)
+      } else {
+        for (const k of visibleKeys) next.add(k)
+      }
+      return next
+    })
+  }
+
+  function toggleRow(key: string) {
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key); else next.add(key)
+      return next
+    })
+  }
+
+  const selectedRows = useMemo(
+    () => filtered.filter((r) => selected.has(ROW_KEY(r))),
+    [filtered, selected],
+  )
+  const selBridgeable = selectedRows.filter((r) => !r.mapped).length
+  const selUnbridgeable = selectedRows.filter((r) => r.mapped).length
 
   function toggleSet<T>(set: Set<T>, value: T): Set<T> {
     const next = new Set(set)
@@ -260,11 +562,45 @@ export default function DiscoveredPage() {
             ({filtered.length}{filtered.length !== counts.total ? ` / ${counts.total}` : ''})
           </span>
         </h1>
-        <div className="flex items-center gap-3 text-xs text-muted-foreground">
-          <span>{counts.mapped} bridged</span>
-          <span aria-hidden>·</span>
-          <span>{counts.unmapped} new</span>
+      </div>
+
+      {/* KPI row + recent activity */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-2">
+        <div className="grid grid-cols-2 gap-2">
+          <KpiCard
+            label="Total discovered"
+            value={counts.total}
+            hint="All entities found"
+            Icon={Antenna}
+            tone="bg-sky-500/10 text-sky-600 dark:text-sky-400"
+            accent="border-l-sky-500"
+          />
+          <KpiCard
+            label="New"
+            value={counts.unmapped}
+            hint={counts.unmapped > 0 ? 'Awaiting bridging' : 'Nothing new'}
+            Icon={Sparkles}
+            tone="bg-blue-500/10 text-blue-600 dark:text-blue-400"
+            accent="border-l-blue-500"
+          />
+          <KpiCard
+            label="Bridged"
+            value={counts.mapped}
+            hint={counts.total > 0 ? `${Math.round((counts.mapped / counts.total) * 100)}% of total` : 'None yet'}
+            Icon={Link2}
+            tone="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+            accent="border-l-emerald-500"
+          />
+          <KpiCard
+            label="Plugins active"
+            value={`${pluginsConnected} / ${plugins?.length ?? 0}`}
+            hint={pluginsConnected === (plugins?.length ?? 0) ? 'All connected' : 'Some offline'}
+            Icon={Plug}
+            tone="bg-amber-500/10 text-amber-600 dark:text-amber-400"
+            accent="border-l-amber-500"
+          />
         </div>
+        <RecentActivity />
       </div>
 
       {/* Toolbar */}
@@ -307,6 +643,25 @@ export default function DiscoveredPage() {
                 {v === 'all' ? `All (${counts.total})`
                   : v === 'mapped' ? `Bridged (${counts.mapped})`
                   : `New (${counts.unmapped})`}
+              </button>
+            ))}
+          </div>
+
+          <div className="inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs">
+            <Layers className="size-3 text-muted-foreground" />
+            <span className="text-muted-foreground">Group:</span>
+            {(['none', 'plugin', 'kind'] as const).map((v) => (
+              <button
+                key={v}
+                type="button"
+                onClick={() => setGroupBy(v)}
+                className={`rounded px-1.5 py-0.5 transition-colors ${
+                  groupBy === v
+                    ? 'bg-primary text-primary-foreground'
+                    : 'text-muted-foreground hover:bg-muted'
+                }`}
+              >
+                {v === 'none' ? 'None' : v === 'plugin' ? 'Plugin' : 'Kind'}
               </button>
             ))}
           </div>
@@ -381,9 +736,43 @@ export default function DiscoveredPage() {
         )}
       </div>
 
+      {/* Bulk action bar (sticky above the table when something is selected) */}
+      {selected.size > 0 && (
+        <div className="sticky top-0 z-10 flex flex-wrap items-center gap-2 rounded-lg border bg-primary/10 border-primary/30 px-3 py-2 text-sm">
+          <span className="font-medium">{selected.size} selected</span>
+          <span className="text-xs text-muted-foreground">
+            ({selBridgeable} new · {selUnbridgeable} bridged)
+          </span>
+          <div className="flex-1" />
+          <Button
+            size="sm"
+            disabled={bulkBusy || selBridgeable === 0}
+            onClick={() => void bulkBridge()}
+          >
+            <Link2 className="size-3.5" /> Bridge selected ({selBridgeable})
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={bulkBusy || selUnbridgeable === 0}
+            onClick={() => void bulkUnbridge()}
+          >
+            <Unlink className="size-3.5" /> Un-bridge selected ({selUnbridgeable})
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={bulkBusy}
+            onClick={() => setSelected(new Set())}
+          >
+            Clear
+          </Button>
+        </div>
+      )}
+
       {/* Body */}
       {loadingPlugins || allDiscoveryLoading ? (
-        <p className="text-muted-foreground text-sm">Loading…</p>
+        <SkeletonTable />
       ) : !plugins || plugins.length === 0 ? (
         <p className="text-muted-foreground text-sm">
           No plugins configured. See the <span className="font-medium">Plugins</span> page for an example
@@ -396,130 +785,514 @@ export default function DiscoveredPage() {
         </p>
       ) : filtered.length === 0 ? (
         <p className="text-muted-foreground text-sm">No entities match the current filters.</p>
-      ) : (
-        <div className="border rounded-lg overflow-hidden">
-          <table className="w-full text-sm table-fixed">
-            <colgroup>
-              <col className="w-7" />
-              <col />
-              <col className="w-56" />
-              <col className="w-36 hidden sm:table-column" />
-              <col className="w-28" />
-              <col className="w-28" />
-            </colgroup>
-            <thead>
-              <tr className="border-b bg-muted/50">
-                <th className="px-2 py-2" />
-                <SortHeader label="Name" columnKey="name" sort={sort} setSort={setSort} />
-                <SortHeader label="Remote ID" columnKey="remoteId" sort={sort} setSort={setSort} />
-                <SortHeader label="Plugin" columnKey="plugin" sort={sort} setSort={setSort} className="hidden sm:table-cell" />
-                <SortHeader label="Kind" columnKey="kind" sort={sort} setSort={setSort} />
-                <th className="px-3 py-2 text-right font-medium text-muted-foreground">Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map((r) => {
-                const busy = createMut.isPending || deleteMut.isPending
-                return (
-                  <tr
-                    key={`${r.pluginId}\u0000${r.id}`}
-                    className={`border-b last:border-0 hover:bg-muted/30 transition-colors ${
-                      r.mapped ? 'bg-emerald-500/[0.04]' : ''
-                    }`}
-                  >
-                    <td className="pl-3 pr-1 py-2 align-middle">
-                      {r.mapped ? (
-                        <CheckCircle2 className="size-4 text-emerald-600 dark:text-emerald-400" aria-label="Bridged" />
-                      ) : (
-                        <Circle className="size-4 text-muted-foreground/40" aria-label="Not bridged" />
-                      )}
-                    </td>
-                    <td className="px-3 py-2 min-w-0">
-                      <div className="font-medium truncate" title={r.name}>{r.name}</div>
-                      {(() => {
-                        const a = (r.attributes ?? {}) as Record<string, unknown>
-                        const str = (k: string) => {
-                          const v = a[k]
-                          return typeof v === 'string' || typeof v === 'number' ? String(v) : ''
-                        }
-                        const device = str('device')
-                        const area   = str('area')
-                        const model  = str('model')
-                        const ip     = str('ip') || str('addr')
-                        const sw     = str('sw') || str('ver')
-                        const parts: string[] = []
-                        if (device && device !== r.name) parts.push(device)
-                        if (area) parts.push(area)
-                        if (model) parts.push(model)
-                        if (ip) parts.push(ip)
-                        if (sw) parts.push(`v${sw.replace(/^v/i, '')}`)
-                        if (parts.length === 0) return null
-                        const tooltip = Object.entries(a)
-                          .filter(([, v]) => v != null && v !== '')
-                          .map(([k, v]) => `${k}: ${String(v)}`)
-                          .join('\n')
-                        return (
-                          <div className="text-[11px] text-muted-foreground truncate" title={tooltip}>
-                            {parts.join(' · ')}
-                          </div>
-                        )
-                      })()}
-                    </td>
-                    <td className="px-3 py-2">
-                      <div className="font-mono text-[11px] text-muted-foreground truncate" title={r.id}>
-                        {r.id}
-                      </div>
-                    </td>
-                    <td className="px-3 py-2 hidden sm:table-cell">
-                      <span
-                        className={`inline-block max-w-full truncate rounded-md border px-1.5 py-0.5 text-[11px] font-mono ${pluginBadge(r.pluginStatus)}`}
-                        title={`${r.pluginId} · ${r.pluginStatus}`}
-                      >
-                        {r.pluginId}
-                      </span>
-                    </td>
-                    <td className="px-3 py-2">
-                      <span className={`inline-block rounded-md border px-1.5 py-0.5 text-[11px] ${kindBadge(r.kind)}`}>
-                        {r.kind}
-                      </span>
-                    </td>
-                    <td className="px-3 py-2 text-right">
-                      {r.mapped ? (
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          disabled={busy}
-                          onClick={() => {
-                            const dsuid = dsuidByRemote.get(`${r.pluginId}\u0000${r.id}`)
-                            if (dsuid) deleteMut.mutate(dsuid)
-                          }}
-                        >
-                          Un-bridge
-                        </Button>
-                      ) : (
-                        <Button
-                          size="sm"
-                          disabled={busy}
-                          onClick={() =>
-                            createMut.mutate({
-                              pluginId: r.pluginId,
-                              remoteEntityId: r.id,
-                              name: r.name,
-                              kind: r.kind,
-                            })
-                          }
-                        >
-                          Bridge
-                        </Button>
-                      )}
-                    </td>
+      ) : (() => {
+        const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize))
+        const safePage = Math.min(page, totalPages - 1)
+        const start = safePage * pageSize
+        const paged = filtered.slice(start, start + pageSize)
+
+        // Build group buckets in iteration order of `paged` so sort is preserved.
+        const groups: { key: string; label: string; items: Row[] }[] = []
+        const groupIdx = new Map<string, number>()
+        for (const r of paged) {
+          const k = groupBy === 'plugin' ? r.pluginId : groupBy === 'kind' ? r.kind : '__all'
+          let idx = groupIdx.get(k)
+          if (idx === undefined) {
+            idx = groups.length
+            groupIdx.set(k, idx)
+            groups.push({ key: k, label: k, items: [] })
+          }
+          groups[idx].items.push(r)
+        }
+
+        const busy = createMut.isPending || deleteMut.isPending || bulkBusy
+
+        return (
+          <>
+            <div className="border rounded-lg overflow-hidden">
+              <table className="w-full text-sm table-fixed">
+                <colgroup>
+                  <col className="w-9" />
+                  <col className="w-9" />
+                  <col />
+                  <col className="w-56" />
+                  <col className="w-36 hidden sm:table-column" />
+                  <col className="w-24" />
+                  <col className="w-28" />
+                  <col className="w-28" />
+                </colgroup>
+                <thead>
+                  <tr className="border-b bg-muted/50">
+                    <th className="px-2 py-2">
+                      <input
+                        type="checkbox"
+                        aria-label="Select all visible"
+                        checked={allVisibleSelected}
+                        ref={(el) => { if (el) el.indeterminate = someVisibleSelected }}
+                        onChange={toggleAllVisible}
+                        className="cursor-pointer"
+                      />
+                    </th>
+                    <th className="px-1 py-2" />
+                    <SortHeader label="Name" columnKey="name" sort={sort} setSort={setSort} />
+                    <SortHeader label="Remote ID" columnKey="remoteId" sort={sort} setSort={setSort} />
+                    <SortHeader label="Plugin" columnKey="plugin" sort={sort} setSort={setSort} className="hidden sm:table-cell" />
+                    <SortHeader label="Kind" columnKey="kind" sort={sort} setSort={setSort} />
+                    <SortHeader label="Status" columnKey="mapped" sort={sort} setSort={setSort} />
+                    <th className="px-3 py-2 text-right font-medium text-muted-foreground">Action</th>
                   </tr>
-                )
-              })}
-            </tbody>
-          </table>
-        </div>
+                </thead>
+                <tbody>
+                  {groups.map((g) => (
+                    <GroupBlock
+                      key={g.key}
+                      group={g}
+                      groupBy={groupBy}
+                      counts={counts}
+                      selected={selected}
+                      expanded={expanded}
+                      busy={busy}
+                      dsuidByRemote={dsuidByRemote}
+                      onToggleRow={toggleRow}
+                      onToggleExpand={toggleExpanded}
+                      onBridgeOne={(r) => createMut.mutate({
+                        pluginId: r.pluginId, remoteEntityId: r.id, name: r.name, kind: r.kind,
+                      })}
+                      onUnbridgeOne={(r) => {
+                        const dsuid = dsuidByRemote.get(ROW_KEY(r))
+                        if (dsuid) deleteMut.mutate(dsuid)
+                      }}
+                      onBridgeAllNew={(items) => {
+                        const targets = items.filter((r) => !r.mapped)
+                        for (const r of targets) {
+                          createMut.mutate({
+                            pluginId: r.pluginId, remoteEntityId: r.id, name: r.name, kind: r.kind,
+                          })
+                        }
+                      }}
+                    />
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Pagination footer */}
+            <div className="flex flex-wrap items-center justify-between gap-2 px-1 text-xs text-muted-foreground">
+              <div>
+                Showing <span className="tabular-nums text-foreground">{start + 1}</span>–
+                <span className="tabular-nums text-foreground">{Math.min(start + pageSize, filtered.length)}</span>{' '}
+                of <span className="tabular-nums text-foreground">{filtered.length}</span>
+                {filtered.length !== counts.total && (
+                  <span className="ml-1">(filtered from {counts.total})</span>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                <label className="flex items-center gap-1.5">
+                  <span>Per page</span>
+                  <select
+                    value={pageSize}
+                    onChange={(e) => setPageSize(Number(e.target.value))}
+                    className="rounded border bg-background px-1.5 py-0.5 text-xs"
+                  >
+                    {[25, 50, 100, 200].map((n) => (
+                      <option key={n} value={n}>{n}</option>
+                    ))}
+                  </select>
+                </label>
+                <div className="inline-flex items-center rounded-md border overflow-hidden">
+                  <button
+                    type="button"
+                    onClick={() => setPage((p) => Math.max(0, p - 1))}
+                    disabled={safePage === 0}
+                    className="px-2 py-1 hover:bg-muted disabled:opacity-40 disabled:hover:bg-transparent"
+                    aria-label="Previous page"
+                  >
+                    <ChevronLeft className="size-3.5" />
+                  </button>
+                  <span className="px-2 py-1 tabular-nums border-x">
+                    {safePage + 1} / {totalPages}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+                    disabled={safePage >= totalPages - 1}
+                    className="px-2 py-1 hover:bg-muted disabled:opacity-40 disabled:hover:bg-transparent"
+                    aria-label="Next page"
+                  >
+                    <ChevronRight className="size-3.5" />
+                  </button>
+                </div>
+              </div>
+            </div>
+          </>
+        )
+      })()}
+
+      {/* Confirm un-bridge modal */}
+      {confirmUnbridgeOpen && (
+        <ConfirmUnbridgeModal
+          targets={selectedRows.filter((r) => r.mapped)}
+          busy={bulkBusy}
+          onCancel={() => setConfirmUnbridgeOpen(false)}
+          onConfirm={() => void executeBulkUnbridge()}
+        />
       )}
+    </div>
+  )
+}
+
+// ── Group block & row ────────────────────────────────────────────────────────
+
+function GroupBlock({
+  group, groupBy, counts, selected, expanded, busy, dsuidByRemote,
+  onToggleRow, onToggleExpand, onBridgeOne, onUnbridgeOne, onBridgeAllNew,
+}: {
+  group: { key: string; label: string; items: Row[] }
+  groupBy: 'none' | 'plugin' | 'kind'
+  counts: { byPlugin: Record<string, number>; byKind: Record<string, number> }
+  selected: Set<string>
+  expanded: Set<string>
+  busy: boolean
+  dsuidByRemote: Map<string, string>
+  onToggleRow: (key: string) => void
+  onToggleExpand: (key: string) => void
+  onBridgeOne: (r: Row) => void
+  onUnbridgeOne: (r: Row) => void
+  onBridgeAllNew: (items: Row[]) => void
+}) {
+  const newCount = group.items.filter((r) => !r.mapped).length
+  const bridgedCount = group.items.length - newCount
+  const total = groupBy === 'plugin'
+    ? counts.byPlugin[group.key] ?? group.items.length
+    : groupBy === 'kind'
+      ? counts.byKind[group.key] ?? group.items.length
+      : group.items.length
+
+  return (
+    <>
+      {groupBy !== 'none' && (
+        <tr className="bg-muted/30 border-b">
+          <td colSpan={8} className="px-3 py-1.5">
+            <div className="flex items-center gap-2 text-xs">
+              <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                {groupBy}
+              </span>
+              <span className="font-medium">{group.label}</span>
+              <span className="text-muted-foreground tabular-nums">
+                · {group.items.length}{group.items.length !== total ? ` / ${total}` : ''}
+              </span>
+              <span className="text-muted-foreground">
+                ({newCount} new · {bridgedCount} bridged)
+              </span>
+              <div className="flex-1" />
+              {newCount > 0 && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={busy}
+                  onClick={() => onBridgeAllNew(group.items)}
+                >
+                  <Link2 className="size-3.5" /> Bridge all new ({newCount})
+                </Button>
+              )}
+            </div>
+          </td>
+        </tr>
+      )}
+      {group.items.map((r) => (
+        <EntityRow
+          key={ROW_KEY(r)}
+          row={r}
+          selected={selected.has(ROW_KEY(r))}
+          expanded={expanded.has(ROW_KEY(r))}
+          busy={busy}
+          dsuidByRemote={dsuidByRemote}
+          onToggleSelect={() => onToggleRow(ROW_KEY(r))}
+          onToggleExpand={() => onToggleExpand(ROW_KEY(r))}
+          onBridge={() => onBridgeOne(r)}
+          onUnbridge={() => onUnbridgeOne(r)}
+        />
+      ))}
+    </>
+  )
+}
+
+function EntityRow({
+  row, selected, expanded, busy, dsuidByRemote,
+  onToggleSelect, onToggleExpand, onBridge, onUnbridge,
+}: {
+  row: Row
+  selected: boolean
+  expanded: boolean
+  busy: boolean
+  dsuidByRemote: Map<string, string>
+  onToggleSelect: () => void
+  onToggleExpand: () => void
+  onBridge: () => void
+  onUnbridge: () => void
+}) {
+  const { Icon: DevIcon, tone: devTone } = deviceIconFor(row.kind, row.id, row.attributes)
+  const a = (row.attributes ?? {}) as Record<string, unknown>
+  const str = (k: string) => {
+    const v = a[k]
+    return typeof v === 'string' || typeof v === 'number' ? String(v) : ''
+  }
+  const device = str('device')
+  const area   = str('area')
+  const model  = str('model')
+  const ip     = str('ip') || str('addr')
+  const sw     = str('sw') || str('ver')
+  const summaryParts: string[] = []
+  if (device && device !== row.name) summaryParts.push(device)
+  if (area) summaryParts.push(area)
+  if (model) summaryParts.push(model)
+  if (ip) summaryParts.push(ip)
+  if (sw) summaryParts.push(`v${sw.replace(/^v/i, '')}`)
+
+  const dsuid = dsuidByRemote.get(ROW_KEY(row))
+
+  return (
+    <>
+      <tr
+        className={`border-b last:border-0 hover:bg-muted/30 transition-colors cursor-pointer ${
+          row.mapped ? 'bg-emerald-500/[0.04]' : ''
+        } ${selected ? 'bg-primary/[0.06]' : ''} ${expanded ? 'bg-muted/40' : ''}`}
+        onClick={onToggleExpand}
+      >
+        <td
+          className="pl-3 pr-1 py-2 align-middle"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <input
+            type="checkbox"
+            aria-label={`Select ${row.name}`}
+            checked={selected}
+            onChange={onToggleSelect}
+            className="cursor-pointer"
+          />
+        </td>
+        <td className="px-1 py-2 align-middle">
+          <div className={`size-7 rounded-md grid place-items-center ${devTone}`}>
+            <DevIcon className="size-4" />
+          </div>
+        </td>
+        <td className="px-3 py-2 min-w-0">
+          <div className="flex items-center gap-1.5 min-w-0">
+            <ChevronDown
+              className={`size-3.5 shrink-0 text-muted-foreground transition-transform ${
+                expanded ? '' : '-rotate-90'
+              }`}
+            />
+            <div className="font-medium truncate" title={row.name}>{row.name}</div>
+          </div>
+          {summaryParts.length > 0 && (
+            <div className="ml-5 text-[11px] text-muted-foreground truncate">
+              {summaryParts.join(' · ')}
+            </div>
+          )}
+        </td>
+        <td className="px-3 py-2">
+          <div className="font-mono text-[11px] text-muted-foreground truncate" title={row.id}>
+            {row.id}
+          </div>
+        </td>
+        <td className="px-3 py-2 hidden sm:table-cell">
+          <span
+            className={`inline-block max-w-full truncate rounded-md border px-1.5 py-0.5 text-[11px] font-mono ${pluginBadge(row.pluginStatus)}`}
+            title={`${row.pluginId} · ${row.pluginStatus}`}
+          >
+            {row.pluginId}
+          </span>
+        </td>
+        <td className="px-3 py-2">
+          <span className={`inline-block rounded-md border px-1.5 py-0.5 text-[11px] ${kindBadge(row.kind)}`}>
+            {row.kind}
+          </span>
+        </td>
+        <td className="px-3 py-2">
+          {row.mapped ? (
+            <span className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/30">
+              <span className="size-1.5 rounded-full bg-current opacity-70" />
+              Bridged
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-500/30">
+              <span className="size-1.5 rounded-full bg-current opacity-70" />
+              New
+            </span>
+          )}
+        </td>
+        <td
+          className="px-3 py-2 text-right"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {row.mapped ? (
+            <Button size="sm" variant="ghost" disabled={busy} onClick={onUnbridge}>
+              Un-bridge
+            </Button>
+          ) : (
+            <Button size="sm" disabled={busy} onClick={onBridge}>
+              Bridge
+            </Button>
+          )}
+        </td>
+      </tr>
+      {expanded && (
+        <tr className="border-b bg-muted/20">
+          <td colSpan={8} className="px-4 py-3">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+              <div>
+                <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1.5">
+                  Identity
+                </div>
+                <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5">
+                  <dt className="text-muted-foreground">Plugin</dt>
+                  <dd className="font-mono">{row.pluginId}</dd>
+                  <dt className="text-muted-foreground">Remote ID</dt>
+                  <dd className="font-mono break-all">{row.id}</dd>
+                  <dt className="text-muted-foreground">Kind</dt>
+                  <dd>{row.kind}</dd>
+                  <dt className="text-muted-foreground">Status</dt>
+                  <dd>{row.mapped ? 'Bridged' : 'New'}</dd>
+                  {row.mapped && dsuid && (
+                    <>
+                      <dt className="text-muted-foreground">DSUID</dt>
+                      <dd className="font-mono break-all">{dsuid}</dd>
+                    </>
+                  )}
+                </dl>
+              </div>
+              <div>
+                <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1.5">
+                  Attributes
+                </div>
+                {Object.keys(a).length === 0 ? (
+                  <div className="text-muted-foreground italic">None reported.</div>
+                ) : (
+                  <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5">
+                    {Object.entries(a).map(([k, v]) => (
+                      <span key={k} className="contents">
+                        <dt className="text-muted-foreground font-mono text-[11px]">{k}</dt>
+                        <dd className="font-mono text-[11px] break-all">
+                          {v == null
+                            ? <span className="italic text-muted-foreground">null</span>
+                            : typeof v === 'object'
+                              ? JSON.stringify(v)
+                              : String(v)}
+                        </dd>
+                      </span>
+                    ))}
+                  </dl>
+                )}
+              </div>
+            </div>
+          </td>
+        </tr>
+      )}
+    </>
+  )
+}
+
+// ── Skeleton loading ─────────────────────────────────────────────────────────
+
+function SkeletonTable() {
+  return (
+    <div className="border rounded-lg overflow-hidden">
+      <div className="border-b bg-muted/50 h-9" />
+      <div className="divide-y">
+        {Array.from({ length: 6 }).map((_, i) => (
+          <div key={i} className="flex items-center gap-3 px-3 py-2.5">
+            <div className="size-4 rounded bg-muted animate-pulse" />
+            <div className="size-7 rounded-md bg-muted animate-pulse" />
+            <div className="flex-1 space-y-1.5">
+              <div className="h-3 w-40 max-w-[60%] rounded bg-muted animate-pulse" />
+              <div className="h-2.5 w-56 max-w-[40%] rounded bg-muted/70 animate-pulse" />
+            </div>
+            <div className="h-3 w-32 rounded bg-muted animate-pulse hidden sm:block" />
+            <div className="h-5 w-16 rounded bg-muted animate-pulse" />
+            <div className="h-5 w-20 rounded-full bg-muted animate-pulse" />
+            <div className="h-7 w-20 rounded-md bg-muted animate-pulse" />
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// ── Confirm un-bridge modal ──────────────────────────────────────────────────
+
+function ConfirmUnbridgeModal({
+  targets, busy, onCancel, onConfirm,
+}: {
+  targets: Row[]
+  busy: boolean
+  onCancel: () => void
+  onConfirm: () => void
+}) {
+  const previewLimit = 10
+  const preview = targets.slice(0, previewLimit)
+  const more = targets.length - preview.length
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 p-4 overflow-y-auto">
+      <div className="bg-background border rounded-lg shadow-lg w-full max-w-md my-8 flex flex-col max-h-[calc(100vh-4rem)]">
+        <div className="flex items-center justify-between border-b px-4 py-3">
+          <h2 className="text-base font-semibold flex items-center gap-2">
+            <Link2Off className="size-4 text-amber-500" />
+            Un-bridge {targets.length} {targets.length === 1 ? 'entity' : 'entities'}?
+          </h2>
+          <button
+            onClick={onCancel}
+            disabled={busy}
+            className="text-muted-foreground hover:text-foreground disabled:opacity-50"
+            aria-label="Close"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="px-4 py-4 overflow-y-auto flex-1 space-y-3">
+          <p className="text-sm text-muted-foreground">
+            The following {targets.length === 1 ? 'device' : 'devices'} will be removed from
+            digitalSTROM. The remote {targets.length === 1 ? 'entity' : 'entities'} will remain
+            in {targets.length === 1 ? 'its' : 'their'} source plugin and can be re-bridged later.
+          </p>
+          <ul className="rounded-md border divide-y bg-muted/20 text-sm max-h-64 overflow-y-auto">
+            {preview.map((r) => {
+              const { Icon, tone } = deviceIconFor(r.kind, r.id, r.attributes)
+              return (
+                <li key={ROW_KEY(r)} className="flex items-center gap-2 px-3 py-1.5">
+                  <div className={`size-6 rounded grid place-items-center ${tone}`}>
+                    <Icon className="size-3.5" />
+                  </div>
+                  <span className="font-medium truncate flex-1" title={r.name}>{r.name}</span>
+                  <span className="text-[11px] font-mono text-muted-foreground truncate max-w-[40%]" title={r.pluginId}>
+                    {r.pluginId}
+                  </span>
+                </li>
+              )
+            })}
+            {more > 0 && (
+              <li className="px-3 py-1.5 text-xs text-muted-foreground italic">
+                …and {more} more
+              </li>
+            )}
+          </ul>
+        </div>
+        <div className="flex items-center justify-end gap-2 border-t px-4 py-3">
+          <Button variant="ghost" size="sm" onClick={onCancel} disabled={busy}>
+            Cancel
+          </Button>
+          <Button
+            variant="destructive"
+            size="sm"
+            onClick={onConfirm}
+            disabled={busy}
+          >
+            <Unlink className="size-3.5" />
+            {busy ? 'Un-bridging…' : `Un-bridge ${targets.length}`}
+          </Button>
+        </div>
+      </div>
     </div>
   )
 }

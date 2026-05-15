@@ -214,6 +214,11 @@ export const api = {
   createBridge: (req: CreateBridgeRequest) =>
     postJSON<Mapping>('/bridges', req),
   deleteBridge: (dsuid: string) => del(`/bridges/${encodeURIComponent(dsuid)}`),
+  setButtonGroup: (dsuid: string, idx: number, group: number) =>
+    putJSON<{ ok: boolean; dsuid: string; idx: number; group: number }>(
+      `/devices/${encodeURIComponent(dsuid)}/buttons/${idx}/group`,
+      { group },
+    ),
   settings: () => get<SettingsInfo>('/settings'),
   forgetVdsm: () => postJSON<ForgetVdsmResponse>('/settings/forget-vdsm', {}),
   exportConfigUrl: () => `${BASE}/settings/export`,

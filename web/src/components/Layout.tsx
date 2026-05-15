@@ -144,8 +144,8 @@ export default function Layout() {
               </div>
               <div className="leading-tight min-w-0">
                 <div className="text-[10px] uppercase tracking-wider text-muted-foreground">this vDC</div>
-                <div className="font-mono text-sm font-semibold truncate" title={dss?.vdcDSUID}>
-                  {shortDSUID(dss?.vdcDSUID)}
+                <div className="font-mono text-sm font-semibold" title={dss?.vdcDSUID}>
+                  {dss?.vdcDSUID ?? '—'}
                 </div>
                 <div className="text-[11px] text-muted-foreground truncate">Digitalstrom VDC</div>
               </div>

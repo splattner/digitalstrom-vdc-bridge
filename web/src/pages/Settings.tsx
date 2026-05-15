@@ -8,6 +8,7 @@ import {
   Monitor,
   Moon,
   RefreshCw,
+  Save,
   Sun,
 } from 'lucide-react'
 import { api, type SettingsInfo } from '@/api/client'
@@ -145,6 +146,25 @@ function BoolBadge({ value }: { value: boolean }) {
 // --- cards -----------------------------------------------------------------
 
 function IdentityCard({ info }: { info: SettingsInfo }) {
+  const queryClient = useQueryClient()
+  const toast = useToasts((s) => s.push)
+  const [desc, setDesc] = useState(info.description)
+  const [vendor, setVendor] = useState(info.vendor)
+  const [model, setModel] = useState(info.model)
+
+  const dirty =
+    desc !== info.description || vendor !== info.vendor || model !== info.model
+
+  const save = useMutation({
+    mutationFn: () => api.patchIdentity({ description: desc, vendor, model }),
+    onSuccess: () => {
+      toast('Identity saved.', 'success')
+      queryClient.invalidateQueries({ queryKey: ['settings'] })
+    },
+    onError: (err) =>
+      toast(`Save failed: ${err instanceof Error ? err.message : String(err)}`, 'error'),
+  })
+
   return (
     <Card title="vDC identity" description="How this vDC presents itself to the digitalSTROM server.">
       <Row label="vDC dSUID">
@@ -154,13 +174,28 @@ function IdentityCard({ info }: { info: SettingsInfo }) {
         </div>
       </Row>
       <Row label="Description">
-        <span className="text-sm">{info.description || '—'}</span>
+        <input
+          className="w-full rounded-md border border-input bg-background px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+          value={desc}
+          onChange={(e) => setDesc(e.target.value)}
+          placeholder="vdcgo external"
+        />
       </Row>
       <Row label="Vendor">
-        <span className="text-sm">{info.vendor}</span>
+        <input
+          className="w-full rounded-md border border-input bg-background px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+          value={vendor}
+          onChange={(e) => setVendor(e.target.value)}
+          placeholder="github.com/splattner"
+        />
       </Row>
       <Row label="Model">
-        <span className="text-sm">{info.model}</span>
+        <input
+          className="w-full rounded-md border border-input bg-background px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+          value={model}
+          onChange={(e) => setModel(e.target.value)}
+          placeholder="vdcgo"
+        />
       </Row>
       <Row label="Firmware">
         <Mono>{info.firmwareVersion}</Mono>
@@ -170,6 +205,19 @@ function IdentityCard({ info }: { info: SettingsInfo }) {
           {info.buildVersion} · {info.goVersion} · {info.os}/{info.arch}
         </Mono>
       </Row>
+      {dirty && (
+        <div className="flex justify-end pt-1">
+          <Button
+            size="sm"
+            variant="default"
+            disabled={save.isPending}
+            onClick={() => save.mutate()}
+          >
+            <Save className="size-3.5" />
+            Save
+          </Button>
+        </div>
+      )}
     </Card>
   )
 }

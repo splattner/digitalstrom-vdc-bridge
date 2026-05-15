@@ -3,6 +3,7 @@ package httpapi
 import (
 	"archive/tar"
 	"compress/gzip"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -13,8 +14,6 @@ import (
 
 // Hardcoded vDC identity values surfaced on the Settings page.
 const (
-	settingsVendor          = "splattner.ch"
-	settingsModel           = "vdcgo"
 	settingsFirmwareVersion = "0.1.0"
 )
 
@@ -53,11 +52,16 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	if s.cfg.SessionInfo != nil {
 		session = s.cfg.SessionInfo()
 	}
+	s.identityMu.RLock()
+	desc := s.identityDesc
+	vendor := s.identityVendor
+	model := s.identityModel
+	s.identityMu.RUnlock()
 	writeJSON(w, http.StatusOK, SettingsInfo{
 		VdcDSUID:        s.cfg.DSUID,
-		Description:     s.cfg.Description,
-		Vendor:          settingsVendor,
-		Model:           settingsModel,
+		Description:     desc,
+		Vendor:          vendor,
+		Model:           model,
 		FirmwareVersion: settingsFirmwareVersion,
 		VdcAPIPort:      s.cfg.VdcAPIPort,
 		HTTPListen:      s.cfg.Listen,
@@ -70,6 +74,56 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		OS:              runtime.GOOS,
 		Arch:            runtime.GOARCH,
 		Session:         session,
+	})
+}
+
+// patchIdentityRequest is the body of PATCH /api/settings/identity.
+type patchIdentityRequest struct {
+	Description *string `json:"description"`
+	Vendor      *string `json:"vendor"`
+	Model       *string `json:"model"`
+}
+
+// handlePatchIdentity updates the mutable description/vendor/model and
+// persists the new values to {DataDir}/identity.json when DataDir is set.
+func (s *Server) handlePatchIdentity(w http.ResponseWriter, r *http.Request) {
+	var req patchIdentityRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid JSON: " + err.Error()})
+		return
+	}
+	s.identityMu.Lock()
+	if req.Description != nil {
+		s.identityDesc = *req.Description
+	}
+	if req.Vendor != nil {
+		s.identityVendor = *req.Vendor
+	}
+	if req.Model != nil {
+		s.identityModel = *req.Model
+	}
+	desc := s.identityDesc
+	vendor := s.identityVendor
+	model := s.identityModel
+	s.identityMu.Unlock()
+
+	if s.cfg.DataDir != "" {
+		identityPath := filepath.Join(s.cfg.DataDir, "identity.json")
+		payload, _ := json.MarshalIndent(map[string]string{
+			"description": desc,
+			"vendor":      vendor,
+			"model":       model,
+		}, "", "  ")
+		if err := os.WriteFile(identityPath, payload, 0o644); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "persist failed: " + err.Error()})
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":          true,
+		"description": desc,
+		"vendor":      vendor,
+		"model":       model,
 	})
 }
 

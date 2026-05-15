@@ -194,22 +194,8 @@ export default function Layout() {
               {isDark ? <Moon className="h-3.5 w-3.5" /> : <Sun className="h-3.5 w-3.5" />}
               {isDark ? 'Dark' : 'Light'}
             </button>
-
-            {/* API status pill */}
-            <span
-              className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-medium ring-1 ${
-                online
-                  ? 'bg-emerald-500/10 text-emerald-700 ring-emerald-500/30 dark:text-emerald-300'
-                  : 'bg-red-500/10 text-red-700 ring-red-500/30 dark:text-red-300'
-              }`}
-            >
-              <span className={`h-2 w-2 rounded-full ${online ? 'bg-emerald-500' : 'bg-red-500'}`} />
-              {online ? 'API online' : 'API offline'}
-            </span>
           </div>
         </header>
-
-        {/* Page content */}
         <main className="flex-1 overflow-auto px-6 py-6 bg-muted/30">
           <Outlet />
         </main>

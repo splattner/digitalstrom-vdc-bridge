@@ -9,9 +9,9 @@ import {
   Home,
   Copy,
   Info,
-  MoreVertical,
   MousePointerClick,
   Link2,
+  Link2Off,
 } from 'lucide-react'
 import { api, connectEvents, type Device, type Mapping, type WsEvent } from '@/api/client'
 import { Button } from '@/components/ui/button'
@@ -265,7 +265,6 @@ export default function DevicesPage() {
     onError: (e: unknown) => pushToast(`Un-bridge failed: ${e instanceof Error ? e.message : String(e)}`, 'error'),
   })
 
-  const [selected, setSelected] = useState<Device | null>(null)
   const [expanded, setExpanded] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const [groupFilter, setGroupFilter] = useState<number | null>(null)
@@ -278,9 +277,6 @@ export default function DevicesPage() {
     wsCleanup.current = connectEvents((e: WsEvent) => {
       if (e.type === 'stateChange') {
         void qc.invalidateQueries({ queryKey: ['devices'] })
-        if (selected && e.dsuid === selected.dSUID) {
-          void qc.invalidateQueries({ queryKey: ['device', selected.dSUID] })
-        }
         const evType = (e.data as Record<string, unknown> | undefined)?.eventType
         if (evType === 'button_action' && e.dsuid) {
           setButtonFlash((prev) => ({ ...prev, [e.dsuid!]: Date.now() }))
@@ -288,7 +284,7 @@ export default function DevicesPage() {
       }
     })
     return () => wsCleanup.current?.()
-  }, [qc, selected])
+  }, [qc])
 
   const rows = Object.values(devices ?? {})
 
@@ -434,7 +430,7 @@ export default function DevicesPage() {
                   <th className="text-left px-3 py-3 font-medium text-xs uppercase tracking-wider text-muted-foreground w-16">Active</th>
                   <th className="text-left px-3 py-3 font-medium text-xs uppercase tracking-wider text-muted-foreground">Channels / Sensors</th>
                   <th className="text-left px-3 py-3 font-medium text-xs uppercase tracking-wider text-muted-foreground w-40 hidden md:table-cell">Source</th>
-                  <th className="w-10 px-2 py-3"></th>
+                  <th className="w-16 px-3 py-3"></th>
                 </tr>
               </thead>
               <tbody>
@@ -522,17 +518,24 @@ export default function DevicesPage() {
                             <span className="text-muted-foreground/50 text-xs">native</span>
                           )}
                         </td>
-                        <td className="pr-2 py-3 text-right">
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            className="h-7 w-7 p-0 text-muted-foreground"
-                            onClick={(ev: React.MouseEvent) => { ev.stopPropagation(); setSelected(d) }}
-                            title="More"
-                          >
-                            <MoreVertical className="h-4 w-4" />
-                          </Button>
+                        <td
+                          className="px-3 py-3 text-right"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          {bridge && (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
+                              disabled={unbridgeMut.isPending}
+                              onClick={() => { unbridgeMut.mutate(d.dSUID); setExpanded(null) }}
+                              title="Un-bridge"
+                            >
+                              <Link2Off className="h-4 w-4" />
+                            </Button>
+                          )}
                         </td>
+
                       </tr>
                       {isOpen && (
                         <tr className="border-b last:border-0 bg-muted/20">
@@ -541,14 +544,6 @@ export default function DevicesPage() {
                               device={d}
                               bridge={bridge}
                               flashAt={buttonFlash[d.dSUID]}
-                              onClose={() => setExpanded(null)}
-                              onUnbridge={() => {
-                                if (bridge) {
-                                  unbridgeMut.mutate(d.dSUID)
-                                  setExpanded(null)
-                                }
-                              }}
-                              unbridgePending={unbridgeMut.isPending}
                               onCopy={copyToClipboard}
                             />
                           </td>
@@ -560,44 +555,6 @@ export default function DevicesPage() {
               </tbody>
             </table>
           </div>
-        </div>
-      )}
-
-      {/* ── Optional side drawer (kept for kebab “More” action) ── */}
-      {selected && (
-        <div
-          className="fixed inset-0 z-40 flex justify-end bg-black/30"
-          onClick={() => setSelected(null)}
-        >
-          <aside
-            className="w-80 h-full bg-card border-l overflow-auto flex flex-col shadow-xl"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between px-4 py-3 border-b">
-              <div className="min-w-0">
-                <p className="font-semibold leading-tight truncate">{String(selected.name ?? '—')}</p>
-                <p className="text-xs text-muted-foreground font-mono mt-0.5 truncate">{String(selected.dSUID)}</p>
-              </div>
-              <Button size="sm" variant="ghost" className="h-7 w-7 p-0 shrink-0" onClick={() => setSelected(null)}>
-                <X className="h-4 w-4" />
-              </Button>
-            </div>
-            <div className="px-4 py-3 flex-1">
-              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">Properties</p>
-              <dl className="text-sm space-y-1.5">
-                {Object.entries(selected)
-                  .filter(([k]) => !['channelStates','channelDescriptions','active','zoneID','name','dSUID','outputType'].includes(k))
-                  .map(([k, v]) => (
-                    <div key={k} className="grid grid-cols-[auto_1fr] gap-x-2 items-start">
-                      <dt className="text-muted-foreground text-xs whitespace-nowrap">{k}</dt>
-                      <dd className="font-mono text-xs text-right truncate">
-                        {typeof v === 'object' ? JSON.stringify(v) : String(v)}
-                      </dd>
-                    </div>
-                  ))}
-              </dl>
-            </div>
-          </aside>
         </div>
       )}
     </div>
@@ -612,17 +569,11 @@ function ExpandedRow({
   device,
   bridge,
   flashAt,
-  onClose,
-  onUnbridge,
-  unbridgePending,
   onCopy,
 }: {
   device: Device
   bridge: Mapping | undefined
   flashAt?: number
-  onClose: () => void
-  onUnbridge: () => void
-  unbridgePending: boolean
   onCopy: (text: string, label?: string) => void
 }) {
   const isButton = isButtonDevice(device)
@@ -742,25 +693,6 @@ function ExpandedRow({
                         <span className="text-muted-foreground">Kind</span>
                         <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px]">{bridge.kind}</span>
                       </div>
-                      <div className="pt-2 border-t border-border/60 flex items-center gap-2">
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          className="h-7 px-2 text-xs"
-                          disabled={unbridgePending}
-                          onClick={onUnbridge}
-                        >
-                          Un-bridge
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          className="h-7 px-2 text-xs ml-auto"
-                          onClick={onClose}
-                        >
-                          Close
-                        </Button>
-                      </div>
                     </>
                   )}
                   {!bridge && (
@@ -791,22 +723,32 @@ function ExpandedRow({
           )}
 
           {tab === 'metadata' && (
-            <div className="space-y-2">
+            <div className="space-y-3">
               <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Raw properties</p>
-              <dl className="text-xs grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-1.5">
+              <dl className="space-y-2 text-xs">
                 {Object.entries(device)
                   .filter(([k]) => ![
                     'channelStates','channelDescriptions','sensorStates','sensorDescriptions',
                     'active','zoneID','name','dSUID','outputType','primaryGroup',
                   ].includes(k))
-                  .map(([k, v]) => (
-                    <div key={k} className="flex items-start justify-between gap-3">
-                      <dt className="text-muted-foreground shrink-0">{k}</dt>
-                      <dd className="font-mono text-right truncate min-w-0">
-                        {typeof v === 'object' ? JSON.stringify(v) : String(v)}
-                      </dd>
-                    </div>
-                  ))}
+                  .map(([k, v]) => {
+                    const isComplex = v !== null && typeof v === 'object'
+                    return isComplex ? (
+                      <div key={k} className="space-y-1">
+                        <dt className="text-muted-foreground font-medium">{k}</dt>
+                        <dd>
+                          <pre className="overflow-auto max-h-64 rounded-md bg-muted px-3 py-2 text-[11px] font-mono leading-relaxed whitespace-pre-wrap break-all">
+                            {JSON.stringify(v, null, 2)}
+                          </pre>
+                        </dd>
+                      </div>
+                    ) : (
+                      <div key={k} className="flex items-start justify-between gap-3">
+                        <dt className="text-muted-foreground shrink-0">{k}</dt>
+                        <dd className="font-mono text-right break-all min-w-0">{String(v)}</dd>
+                      </div>
+                    )
+                  })}
               </dl>
             </div>
           )}

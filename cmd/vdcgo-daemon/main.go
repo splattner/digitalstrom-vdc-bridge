@@ -21,6 +21,8 @@ func main() {
 	noAuto := flag.Bool("noauto", false, "publish vdc as noauto")
 	dsuid := flag.String("dsuid", "", "34-hex-digit dSUID advertised via DNS-SD")
 	description := flag.String("description", "vdcgo external", "DNS-SD instance description")
+	vendor := flag.String("vendor", "github.com/splattner", "vDC vendor identifier")
+	model := flag.String("model", "vdcgo", "vDC model identifier")
 	dataDir := flag.String("datadir", "", "directory for persistent data (scenes, device config); empty disables persistence")
 	httpListen := flag.String("http-listen", envOrDefault("VDCGO_HTTP_LISTEN", ""), "address for the REST/WebSocket HTTP API, e.g. :8090 (empty = disabled)")
 	flag.Parse()
@@ -33,6 +35,8 @@ func main() {
 		EnableDNSSD:  !*noDiscovery,
 		DSUID:        *dsuid,
 		Description:  *description,
+		Vendor:       *vendor,
+		Model:        *model,
 		NoAuto:       *noAuto,
 		DataDir:      *dataDir,
 		HTTPListen:   *httpListen,

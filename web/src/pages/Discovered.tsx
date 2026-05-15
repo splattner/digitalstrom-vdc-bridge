@@ -1042,12 +1042,26 @@ function EntityRow({
           onClick={(e) => e.stopPropagation()}
         >
           {row.mapped ? (
-            <Button size="sm" variant="ghost" disabled={busy} onClick={onUnbridge}>
-              Un-bridge
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
+              disabled={busy}
+              onClick={onUnbridge}
+              title="Un-bridge"
+            >
+              <Link2Off className="h-4 w-4" />
             </Button>
           ) : (
-            <Button size="sm" disabled={busy} onClick={onBridge}>
-              Bridge
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 w-7 p-0 text-muted-foreground hover:text-foreground"
+              disabled={busy}
+              onClick={onBridge}
+              title="Bridge"
+            >
+              <Link2 className="h-4 w-4" />
             </Button>
           )}
         </td>

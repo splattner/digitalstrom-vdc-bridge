@@ -1,0 +1,213 @@
+name: Build & Release Artifacts
+
+# Reusable workflow — called by release-please.yml after a release is created.
+on:
+  workflow_call:
+    inputs:
+      tag_name:
+        description: 'Release tag (e.g. v0.1.3)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  HA_ADDON_IMAGE_NAME: ha-addon
+  HA_ADDON_ARCHITECTURES: '["amd64", "aarch64"]'
+
+jobs:
+  # ── Build web UI ─────────────────────────────────────────────────────────────
+  web:
+    name: Build web UI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - run: cd web && npm ci && npm run build
+
+      - name: Upload webdist
+        uses: actions/upload-artifact@v4
+        with:
+          name: webdist
+          path: pkg/httpapi/webdist/
+
+  # ── Cross-compile standalone binaries ────────────────────────────────────────
+  binaries:
+    name: Build ${{ matrix.suffix }} binary
+    needs: web
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            suffix: linux-amd64
+          - goos: linux
+            goarch: arm64
+            suffix: linux-arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Download webdist
+        uses: actions/download-artifact@v4
+        with:
+          name: webdist
+          path: pkg/httpapi/webdist/
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          GOARM: ${{ matrix.goarm }}
+        run: |
+          mkdir -p dist
+          go build \
+            -ldflags="-s -w -X github.com/splattner/vdcgo/pkg/vdcgo.Version=${{ inputs.tag_name }}" \
+            -o dist/vdcgo-daemon \
+            ./cmd/vdcgo-daemon
+          tar -czf dist/vdcgo-daemon-${{ matrix.suffix }}.tar.gz \
+            -C dist vdcgo-daemon
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.suffix }}
+          path: dist/*.tar.gz
+
+  # ── Attach binaries to the GitHub release ────────────────────────────────────
+  upload-assets:
+    name: Upload release assets
+    needs: binaries
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: binary-*
+          path: dist/
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag_name }}
+          files: dist/*.tar.gz
+
+  # ── Multi-arch standalone Docker image ───────────────────────────────────────
+  docker:
+    name: Docker image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=semver,pattern={{version}},value=${{ inputs.tag_name }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ inputs.tag_name }}
+            type=raw,value=latest
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: VERSION=${{ inputs.tag_name }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ── HA add-on: prepare build matrix ──────────────────────────────────────────
+  ha-addon-init:
+    name: Initialize HA add-on build matrix
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get build matrix
+        id: matrix
+        uses: home-assistant/builder/actions/prepare-multi-arch-matrix@2026.03.2
+        with:
+          architectures: ${{ env.HA_ADDON_ARCHITECTURES }}
+          image-name: ${{ env.HA_ADDON_IMAGE_NAME }}
+          registry-prefix: ghcr.io/${{ github.repository }}
+
+  # ── HA add-on: build per-arch images (native runners) ────────────────────────
+  ha-addon-build:
+    name: HA add-on (${{ matrix.arch }})
+    needs: ha-addon-init
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.ha-addon-init.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        uses: home-assistant/builder/actions/build-image@2026.03.2
+        with:
+          arch: ${{ matrix.arch }}
+          container-registry-password: ${{ secrets.GITHUB_TOKEN }}
+          # image is provided by prepare-multi-arch-matrix:
+          # ghcr.io/<repo>/<arch>-ha-addon
+          image: ${{ matrix.image }}
+          image-tags: |
+            ${{ inputs.tag_name }}
+            latest
+          push: "true"
+          version: ${{ inputs.tag_name }}
+          file: ha-addon/Dockerfile
+          # BUILD_ARCH and BUILD_VERSION are injected automatically by build-image;
+          # we only need to supply BUILD_FROM and our own VERSION ldflag arg.
+          build-args: |
+            BUILD_FROM=ghcr.io/homeassistant/${{ matrix.arch }}-base:latest
+            VERSION=${{ inputs.tag_name }}
+          cosign: "false"
+
+  # ── HA add-on: publish combined multi-arch manifest ───────────────────────────
+  ha-addon-manifest:
+    name: HA add-on manifest
+    needs: ha-addon-build
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    steps:
+      - name: Publish multi-arch manifest
+        uses: home-assistant/builder/actions/publish-multi-arch-manifest@2026.03.2
+        with:
+          architectures: ${{ env.HA_ADDON_ARCHITECTURES }}
+          container-registry-password: ${{ secrets.GITHUB_TOKEN }}
+          image-name: ${{ env.HA_ADDON_IMAGE_NAME }}
+          registry-prefix: ghcr.io/${{ github.repository }}
+          image-tags: |
+            ${{ inputs.tag_name }}
+            latest
+          cosign: "false"

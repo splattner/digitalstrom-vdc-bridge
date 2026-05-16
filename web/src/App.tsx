@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { HashRouter, Routes, Route, Navigate } from 'react-router-dom'
 import Layout from '@/components/Layout'
 import DevicesPage from '@/pages/Devices'
 import DiscoveredPage from '@/pages/Discovered'
@@ -10,7 +10,7 @@ import { useThemeSync } from '@/lib/uiPrefs'
 export default function App() {
   useThemeSync()
   return (
-    <BrowserRouter>
+    <HashRouter>
       <Routes>
         <Route path="/" element={<Layout />}>
           <Route index element={<Navigate to="/devices" replace />} />
@@ -21,6 +21,6 @@ export default function App() {
           <Route path="settings" element={<SettingsPage />} />
         </Route>
       </Routes>
-    </BrowserRouter>
+    </HashRouter>
   )
 }

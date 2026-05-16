@@ -170,7 +170,12 @@ export interface PluginEvent {
   fields?: Record<string, unknown>
 }
 
-const BASE = '/api'
+// Compute the API base path from the current page URL so the app works both
+// standalone (served at /) and behind the Home Assistant ingress proxy
+// (served at /api/hassio_ingress/<token>/). HashRouter keeps window.location.pathname
+// pointing at the ingress root, so stripping the trailing slash and appending
+// '/api' always yields the correct absolute path.
+const BASE = window.location.pathname.replace(/\/+$/, '') + '/api'
 
 async function get<T>(path: string): Promise<T> {
   const res = await fetch(`${BASE}${path}`)
@@ -298,7 +303,7 @@ export function connectEvents(onEvent: (e: WsEvent) => void): () => void {
   function connect() {
     if (stopped) return
     const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-    ws = new WebSocket(`${proto}://${location.host}/api/events`)
+    ws = new WebSocket(`${proto}://${location.host}${BASE}/events`)
     ws.onmessage = (msg) => {
       try {
         const e = JSON.parse(msg.data as string) as WsEvent

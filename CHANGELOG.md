@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.5](https://github.com/splattner/digitalstrom-vdc-bridge/compare/v0.1.4...v0.1.5) (2026-05-16)
+
+
+### Bug Fixes
+
+* make it work inside ha as addon ([#31](https://github.com/splattner/digitalstrom-vdc-bridge/issues/31)) ([5897e72](https://github.com/splattner/digitalstrom-vdc-bridge/commit/5897e726c7130ce0b6942be689861496e020a666))
+
 ## [0.1.4](https://github.com/splattner/digitalstrom-vdc-bridge/compare/v0.1.3...v0.1.4) (2026-05-16)
 
 

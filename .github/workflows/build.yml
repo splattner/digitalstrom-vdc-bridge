@@ -185,10 +185,7 @@ jobs:
           push: "true"
           version: ${{ inputs.tag_name }}
           file: ha-addon/Dockerfile
-          # BUILD_ARCH and BUILD_VERSION are injected automatically by build-image;
-          # we only need to supply BUILD_FROM and our own VERSION ldflag arg.
           build-args: |
-            BUILD_FROM=ghcr.io/homeassistant/${{ matrix.arch }}-base:latest
             VERSION=${{ inputs.tag_name }}
           cosign: "false"
 

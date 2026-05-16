@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.2](https://github.com/splattner/digitalstrom-vdc-bridge/compare/v0.1.1...v0.1.2) (2026-05-16)
+
+
+### Bug Fixes
+
+* ha addon should use correct image ([#25](https://github.com/splattner/digitalstrom-vdc-bridge/issues/25)) ([08cbdca](https://github.com/splattner/digitalstrom-vdc-bridge/commit/08cbdca371d947a9ffac814b44378ffe26c475e2))
+
 ## [0.1.1](https://github.com/splattner/digitalstrom-vdc-bridge/compare/v0.1.0...v0.1.1) (2026-05-16)
 
 

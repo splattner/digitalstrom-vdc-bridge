@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.3](https://github.com/splattner/digitalstrom-vdc-bridge/compare/v0.1.2...v0.1.3) (2026-05-16)
+
+
+### Bug Fixes
+
+* wrong bae image ([#27](https://github.com/splattner/digitalstrom-vdc-bridge/issues/27)) ([7eed43a](https://github.com/splattner/digitalstrom-vdc-bridge/commit/7eed43a3ecb0e009a3a7f2046f56d164621aedc4))
+
 ## [0.1.2](https://github.com/splattner/digitalstrom-vdc-bridge/compare/v0.1.1...v0.1.2) (2026-05-16)
 
 

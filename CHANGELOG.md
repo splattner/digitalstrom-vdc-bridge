@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.6](https://github.com/splattner/digitalstrom-vdc-bridge/compare/v0.1.5...v0.1.6) (2026-05-16)
+
+
+### Bug Fixes
+
+* use dbus/avahi when running as ha addon ([#33](https://github.com/splattner/digitalstrom-vdc-bridge/issues/33)) ([8fb5495](https://github.com/splattner/digitalstrom-vdc-bridge/commit/8fb5495d3a3d871dfa9e4ad230597ae5a2b27e92))
+
 ## [0.1.5](https://github.com/splattner/digitalstrom-vdc-bridge/compare/v0.1.4...v0.1.5) (2026-05-16)
 
 

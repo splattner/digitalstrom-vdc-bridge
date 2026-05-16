@@ -1,7 +1,6 @@
-# BUILD_FROM is set by the HA supervisor (or by build.yaml / CI) to the
-# architecture-specific base image. Must be declared before any FROM to be
+# Must be declared before any FROM to be
 # usable in a FROM instruction.
-ARG BUILD_FROM=ghcr.io/homeassistant/amd64-base:latest
+ARG BUILD_FROM=ghcr.io/homeassistant/base:latest
 
 # ── Stage 1: Build web UI ─────────────────────────────────────────────────────
 FROM node:20-alpine AS web-builder

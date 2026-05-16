@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.4](https://github.com/splattner/digitalstrom-vdc-bridge/compare/v0.1.3...v0.1.4) (2026-05-16)
+
+
+### Bug Fixes
+
+* prepare is needed ([#29](https://github.com/splattner/digitalstrom-vdc-bridge/issues/29)) ([62a2fb8](https://github.com/splattner/digitalstrom-vdc-bridge/commit/62a2fb88cd43f1749f01bb538fa4078fa3876d2b))
+
 ## [0.1.3](https://github.com/splattner/digitalstrom-vdc-bridge/compare/v0.1.2...v0.1.3) (2026-05-16)
 
 

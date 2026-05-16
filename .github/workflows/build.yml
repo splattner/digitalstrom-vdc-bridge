@@ -203,7 +203,6 @@ jobs:
           # BUILD_ARCH and BUILD_VERSION are injected automatically by build-image;
           # we only need to supply BUILD_FROM and our own VERSION ldflag arg.
           build-args: |
-            BUILD_FROM=ghcr.io/homeassistant/${{ matrix.arch }}-base:latest
             VERSION=${{ needs.prepare.outputs.version }}
           cosign: "false"
 

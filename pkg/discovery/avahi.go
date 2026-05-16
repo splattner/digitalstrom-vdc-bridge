@@ -1,6 +1,7 @@
 package discovery
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/godbus/dbus/v5"
@@ -17,6 +18,10 @@ const (
 	avahiProtoUnspec = int32(-1)
 )
 
+// ErrAvahiUnavailable is returned when the Avahi daemon is not running or its
+// D-Bus service name has no owner. The caller may fall back to direct multicast.
+var ErrAvahiUnavailable = errors.New("avahi daemon not available on D-Bus")
+
 // avahiHandle holds the D-Bus resources for an active Avahi advertisement.
 type avahiHandle struct {
 	conn  *dbus.Conn
@@ -32,6 +37,15 @@ func startViaAvahi(cfg Config) (*avahiHandle, error) {
 	conn, err := dbus.ConnectSystemBus()
 	if err != nil {
 		return nil, fmt.Errorf("connect to system dbus: %w", err)
+	}
+
+	// Check whether avahi-daemon is actually running before going further.
+	// An absent name owner means Avahi is not running; return ErrAvahiUnavailable
+	// so the caller can fall back gracefully instead of crashing.
+	var nameOwner string
+	if err := conn.BusObject().Call("org.freedesktop.DBus.GetNameOwner", 0, avahiBusName).Store(&nameOwner); err != nil {
+		_ = conn.Close()
+		return nil, ErrAvahiUnavailable
 	}
 
 	// Ask Avahi to create a new empty entry group.

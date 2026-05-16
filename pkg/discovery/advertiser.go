@@ -1,9 +1,11 @@
 package discovery
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/grandcat/zeroconf"
+	"github.com/splattner/vdcgo/pkg/logging"
 )
 
 const ServiceTypeDSVDC = "_ds-vdc._tcp"
@@ -42,10 +44,17 @@ func Start(cfg Config) (*Advertiser, error) {
 
 	if cfg.UseAvahiDBus {
 		h, err := startViaAvahi(cfg)
-		if err != nil {
+		if err == nil {
+			return &Advertiser{avahi: h}, nil
+		}
+		if errors.Is(err, ErrAvahiUnavailable) {
+			logging.Warn("dnssd_avahi_unavailable", logging.Fields{
+				"message": "avahi-daemon not found on D-Bus; falling back to direct multicast",
+			})
+			// fall through to zeroconf below
+		} else {
 			return nil, err
 		}
-		return &Advertiser{avahi: h}, nil
 	}
 
 	txt := []string{"dSUID=" + cfg.DSUID}

@@ -18,6 +18,19 @@ env:
   HA_ADDON_ARCHITECTURES: '["amd64", "aarch64"]'
 
 jobs:
+  # ── Strip v prefix once, shared by all downstream jobs ───────────────────────
+  prepare:
+    name: Prepare
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+    steps:
+      - name: Strip v prefix from tag
+        id: ver
+        run: echo "version=${tag_name#v}" >> "$GITHUB_OUTPUT"
+        env:
+          tag_name: ${{ inputs.tag_name }}
+
   # ── Build web UI ─────────────────────────────────────────────────────────────
   web:
     name: Build web UI
@@ -42,7 +55,7 @@ jobs:
   # ── Cross-compile standalone binaries ────────────────────────────────────────
   binaries:
     name: Build ${{ matrix.suffix }} binary
-    needs: web
+    needs: [prepare, web]
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -75,7 +88,7 @@ jobs:
         run: |
           mkdir -p dist
           go build \
-            -ldflags="-s -w -X github.com/splattner/vdcgo/pkg/vdcgo.Version=${{ inputs.tag_name }}" \
+            -ldflags="-s -w -X github.com/splattner/vdcgo/pkg/vdcgo.Version=${{ needs.prepare.outputs.version }}" \
             -o dist/vdcgo-daemon \
             ./cmd/vdcgo-daemon
           tar -czf dist/vdcgo-daemon-${{ matrix.suffix }}.tar.gz \
@@ -107,6 +120,7 @@ jobs:
   # ── Multi-arch standalone Docker image ───────────────────────────────────────
   docker:
     name: Docker image
+    needs: prepare
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -134,7 +148,7 @@ jobs:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
-          build-args: VERSION=${{ inputs.tag_name }}
+          build-args: VERSION=${{ needs.prepare.outputs.version }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
@@ -143,6 +157,7 @@ jobs:
   # ── HA add-on: prepare build matrix ──────────────────────────────────────────
   ha-addon-init:
     name: Initialize HA add-on build matrix
+    needs: prepare
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
@@ -180,19 +195,22 @@ jobs:
           # ghcr.io/<repo>/<arch>-ha-addon
           image: ${{ matrix.image }}
           image-tags: |
-            ${{ inputs.tag_name }}
+            ${{ needs.prepare.outputs.version }}
             latest
           push: "true"
-          version: ${{ inputs.tag_name }}
+          version: ${{ needs.prepare.outputs.version }}
           file: ha-addon/Dockerfile
+          # BUILD_ARCH and BUILD_VERSION are injected automatically by build-image;
+          # we only need to supply BUILD_FROM and our own VERSION ldflag arg.
           build-args: |
-            VERSION=${{ inputs.tag_name }}
+            BUILD_FROM=ghcr.io/homeassistant/${{ matrix.arch }}-base:latest
+            VERSION=${{ needs.prepare.outputs.version }}
           cosign: "false"
 
   # ── HA add-on: publish combined multi-arch manifest ───────────────────────────
   ha-addon-manifest:
     name: HA add-on manifest
-    needs: ha-addon-build
+    needs: [prepare, ha-addon-build]
     runs-on: ubuntu-latest
     permissions:
       packages: write
@@ -205,6 +223,6 @@ jobs:
           image-name: ${{ env.HA_ADDON_IMAGE_NAME }}
           registry-prefix: ghcr.io/${{ github.repository }}
           image-tags: |
-            ${{ inputs.tag_name }}
+            ${{ needs.prepare.outputs.version }}
             latest
           cosign: "false"

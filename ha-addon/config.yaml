@@ -2,7 +2,7 @@ name: digitalSTROM vDC Bridge
 description: >-
   Virtual Device Connector (vDC) for digitalSTROM. Bridges MQTT, Tasmota,
   Zigbee2MQTT, WLED, and Home Assistant devices into the digitalSTROM ecosystem.
-version: 0.1.5
+version: 0.1.6
 slug: digitalstrom_vdc_bridge
 url: https://github.com/splattner/digitalstrom-vdc-bridge
 arch:
@@ -20,8 +20,7 @@ ports_description:
   8999/tcp: >-
     vDC external Device API — use <ha-host>:8999 to integrate external devices
     into the digitalSTROM ecosystem. See documentation for details.
-  8340/tcp: >-
-    vDC API (protobuf) — listen on this port for incoming connections from dss
+  8340/tcp: vDC API (protobuf) — listen on this port for incoming connections from dss
 ingress: true
 ingress_port: 8090
 ingress_stream: false

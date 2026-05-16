@@ -18,6 +18,7 @@ func main() {
 	vdcAPI := flag.Int("vdcapi-port", 0, "vDC API listen port (default: 8340)")
 	noVdcAPI := flag.Bool("novdcapi", false, "disable vDC API stub listener")
 	noDiscovery := flag.Bool("nodiscovery", false, "disable DNS-SD discovery advertisement")
+	avahiDBus := flag.Bool("avahi-dbus", false, "advertise via Avahi D-Bus instead of direct multicast (use inside containers with host D-Bus mounted)")
 	noAuto := flag.Bool("noauto", false, "publish vdc as noauto")
 	dsuid := flag.String("dsuid", "", "34-hex-digit dSUID advertised via DNS-SD")
 	description := flag.String("description", "vdcgo external", "DNS-SD instance description")
@@ -33,6 +34,7 @@ func main() {
 		VdcAPIPort:   *vdcAPI,
 		EnableVdcAPI: !*noVdcAPI,
 		EnableDNSSD:  !*noDiscovery,
+		UseAvahiDBus: *avahiDBus,
 		DSUID:        *dsuid,
 		Description:  *description,
 		Vendor:       *vendor,

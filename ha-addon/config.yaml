@@ -9,15 +9,19 @@ arch:
   - aarch64
   - amd64
 init: false
+host_dbus: true
 map:
   - data:rw
 image: ghcr.io/splattner/digitalstrom-vdc-bridge/ha-addon
 ports:
   8999/tcp: null
+  8340/tcp: 8340
 ports_description:
   8999/tcp: >-
     vDC external Device API — use <ha-host>:8999 to integrate external devices
     into the digitalSTROM ecosystem. See documentation for details.
+  8340/tcp: >-
+    vDC API (protobuf) — listen on this port for incoming connections from dss
 ingress: true
 ingress_port: 8090
 ingress_stream: false
@@ -31,6 +35,7 @@ options:
   non_local: true
   no_discovery: false
   no_auto: false
+  use_avahi_dbus: true
 schema:
   description: str
   listen_port: port
@@ -38,3 +43,4 @@ schema:
   non_local: bool
   no_discovery: bool
   no_auto: bool
+  use_avahi_dbus: bool

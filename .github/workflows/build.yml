@@ -204,7 +204,7 @@ jobs:
           # we only need to supply BUILD_FROM and our own VERSION ldflag arg.
           build-args: |
             VERSION=${{ needs.prepare.outputs.version }}
-          cosign: "false"
+          cosign: "true"
 
   # ── HA add-on: publish combined multi-arch manifest ───────────────────────────
   ha-addon-manifest:

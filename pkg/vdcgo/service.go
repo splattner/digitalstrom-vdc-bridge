@@ -35,6 +35,10 @@ type Config struct {
 	VdcAPIPort   int
 	EnableVdcAPI bool
 	EnableDNSSD  bool
+	// UseAvahiDBus selects the Avahi D-Bus backend for DNS-SD advertisement
+	// instead of opening raw multicast sockets. Requires the host D-Bus socket
+	// to be accessible (host_dbus: true in a Home Assistant add-on).
+	UseAvahiDBus bool
 	DSUID        string
 	Description  string
 	Vendor       string
@@ -302,10 +306,11 @@ func (s *Service) Run(ctx context.Context) error {
 
 	if s.cfg.EnableDNSSD {
 		adv, err := discovery.Start(discovery.Config{
-			Instance: s.cfg.Description,
-			Port:     s.cfg.VdcAPIPort,
-			DSUID:    s.cfg.DSUID,
-			NoAuto:   s.cfg.NoAuto,
+			Instance:     s.cfg.Description,
+			Port:         s.cfg.VdcAPIPort,
+			DSUID:        s.cfg.DSUID,
+			NoAuto:       s.cfg.NoAuto,
+			UseAvahiDBus: s.cfg.UseAvahiDBus,
 		})
 		if err != nil {
 			return err

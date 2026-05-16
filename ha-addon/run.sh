@@ -52,5 +52,9 @@ if bashio::config.true 'no_auto'; then
     args+=("--noauto")
 fi
 
+if bashio::config.true 'use_avahi_dbus'; then
+    args+=("--avahi-dbus")
+fi
+
 bashio::log.info "Starting digitalSTROM vDC Bridge on port ${LISTEN_PORT}..."
 exec /usr/local/bin/vdcgo-daemon "${args[@]}"

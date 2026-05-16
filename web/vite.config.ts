@@ -23,5 +23,11 @@ export default defineConfig({
   build: {
     outDir: '../pkg/httpapi/webdist',
     emptyOutDir: true,
+    // Use relative asset paths so the app works under any URL prefix,
+    // including the Home Assistant ingress path (/api/hassio_ingress/<token>/).
+    assetsDir: 'assets',
   },
+  // Relative base so generated <script>/<link> tags use ./assets/... instead
+  // of /assets/..., which would break behind the HA ingress proxy.
+  base: './',
 })

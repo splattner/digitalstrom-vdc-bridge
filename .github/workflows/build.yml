@@ -175,7 +175,7 @@ jobs:
   # ── HA add-on: build per-arch images (native runners) ────────────────────────
   ha-addon-build:
     name: HA add-on (${{ matrix.arch }})
-    needs: ha-addon-init
+    needs: [prepare, ha-addon-init]
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read

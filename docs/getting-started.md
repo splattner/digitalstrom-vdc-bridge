@@ -179,6 +179,8 @@ Now that the bridge is connected to digitalSTROM, you can add plugins to discove
 
 **Step 2 — Add a plugin.** Click the **+** button in the top-right corner. A modal shows all available plugin types with descriptions. Choose the one that matches your setup (for example, **Home Assistant**).
 
+![Plugins page showing six connected plugins](images/plugins.png)
+
 **Step 3 — Fill in the configuration** form. Each plugin type has its own fields (URL, credentials, etc.). See the individual plugin pages for details:
 
 - [Home Assistant](plugins/homeassistant.md)
@@ -191,9 +193,15 @@ Now that the bridge is connected to digitalSTROM, you can add plugins to discove
 
 **Step 5 — Open the Discovered page** at `http://<bridge>:8090/#/discovered`. You will see a list of all the entities the plugin found (lights, sensors, buttons, etc.).
 
+![Discovered page with entities grouped by plugin and kind](images/discovered.png)
+
 **Step 6 — Map a device.** Click **Map** next to the entity you want to add to digitalSTROM. A dialog lets you set the device name and type. Confirm and the device is announced to the dSS.
 
-**Step 7 — Check digitalSTROM.** Open the dSS configurator. The new device will appear in the default room for external devices. Drag it to the room where it belongs and include it in scenes as you would any native dS device.
+**Step 7 — Check the Devices page.** After mapping, the device appears on the **Devices** page of the bridge UI, showing its live channel values and which plugin it came from.
+
+![Devices page showing bridged lights with channel values](images/devices.png)
+
+**Step 8 — Check digitalSTROM.** Open the dSS configurator. The new device will appear in the default room for external devices. Drag it to the room where it belongs and include it in scenes as you would any native dS device.
 
 ---
 

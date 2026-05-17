@@ -14,6 +14,12 @@ A Go implementation of a [Virtual Device Connector (vDC)](https://developer.digi
   - **Zigbee2MQTT** — discovers Zigbee devices via `<base>/bridge/devices`
 - **Persistent storage** — scenes, device configs, and bridge mappings survive restarts
 
+## Screenshots
+
+| Plugins | Discovered | Devices |
+|---|---|---|
+| ![Plugins page](docs/images/plugins.png) | ![Discovered page](docs/images/discovered.png) | ![Devices page](docs/images/devices.png) |
+
 ## Acknowledgements
 
 This project is heavily inspired by and builds upon the concepts and protocol implementation from [plan44/vdcd](https://github.com/plan44/vdcd) by Lukas Zeller. The vDC API protocol handling, device model abstractions, and overall architecture follow the patterns established in that project. Many thanks to plan44 for the open-source reference implementation.

@@ -18,8 +18,9 @@ ports:
   8340/tcp: 8340
 ports_description:
   8999/tcp: >-
-    vDC external Device API — use <ha-host>:8999 to integrate external devices
-    into the digitalSTROM ecosystem. See documentation for details.
+    vDC external Device API — port the built-in External Device API plugin
+    listens on. Used by external scripts/programs to register as digitalSTROM
+    devices. Must match the listen_port option below.
   8340/tcp: vDC API (protobuf) — listen on this port for incoming connections from dss
 ingress: true
 ingress_port: 8090

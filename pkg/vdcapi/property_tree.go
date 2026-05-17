@@ -313,9 +313,30 @@ func buildButtonTypeProps(dsuid string, d ExternalDeviceState, config *ConfigSto
 			state["action"] = action
 		}
 		tp.buttonInputStates[key] = state
-		tp.buttonInputDescriptions[key] = map[string]any{
-			"name": "button", "buttonID": idx, "supportsLocalKeyMode": false, "supportsActions": true,
+
+		desc := map[string]any{
+			"buttonID": idx, "supportsLocalKeyMode": false, "supportsActions": true,
 		}
+		if bd, ok := d.ButtonDescriptors[idx]; ok {
+			name := strings.TrimSpace(bd.Name)
+			if name == "" {
+				name = "button"
+			}
+			desc["name"] = name
+			if bd.ButtonID != 0 {
+				desc["buttonID"] = bd.ButtonID
+			}
+			if bd.ButtonType != 0 {
+				desc["buttonType"] = bd.ButtonType
+			}
+			if bd.Element != 0 {
+				desc["element"] = bd.Element
+			}
+		} else {
+			desc["name"] = "button"
+		}
+		tp.buttonInputDescriptions[key] = desc
+
 		var slp, cp bool
 		if config != nil {
 			s := config.GetButtonInputSettings(dsuid, idx)

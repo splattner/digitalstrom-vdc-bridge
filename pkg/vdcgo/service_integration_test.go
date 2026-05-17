@@ -12,6 +12,9 @@ import (
 	"time"
 
 	"google.golang.org/protobuf/encoding/protowire"
+
+	"github.com/splattner/vdcgo/pkg/bridge"
+	"github.com/splattner/vdcgo/pkg/bridge/externaldevice"
 )
 
 func TestServiceIntegrationProtobufHarness(t *testing.T) {
@@ -19,11 +22,20 @@ func TestServiceIntegrationProtobufHarness(t *testing.T) {
 	sockPath := filepath.Join(t.TempDir(), "vdcgo-ext.sock")
 
 	svc, err := NewService(Config{
-		Listen:       sockPath,
 		VdcAPIPort:   vdcPort,
 		EnableVdcAPI: true,
 		EnableDNSSD:  false,
 		Description:  "integration-pbuf",
+		PluginConfigs: []bridge.PluginConfig{
+			{
+				ID:   "ext-test",
+				Type: externaldevice.PluginType,
+				Config: map[string]any{
+					"listen":   sockPath,
+					"nonlocal": false,
+				},
+			},
+		},
 	})
 	if err != nil {
 		t.Fatalf("new service: %v", err)
@@ -47,6 +59,7 @@ func TestServiceIntegrationProtobufHarness(t *testing.T) {
 		}
 	}()
 
+	// waitDial implicitly waits for the externaldevice plugin to start (socket appears).
 	ext := waitDial(t, "unix", sockPath, 3*time.Second)
 	defer ext.Close()
 	rExt := bufio.NewReader(ext)
@@ -57,6 +70,13 @@ func TestServiceIntegrationProtobufHarness(t *testing.T) {
 	_ = ext.SetReadDeadline(time.Now().Add(2 * time.Second))
 	if _, err := rExt.ReadString('\n'); err != nil {
 		t.Fatalf("read init status: %v", err)
+	}
+	// The server sends the ack only after emitting EventInit, so the device is now
+	// registered in the plugin. Create the bridge mapping before the vDSM connects so
+	// both AnnounceDevice calls (from CreateBridge + Subscribe) land in the state store
+	// before the vDSM subscribes — the vDSM then sees a clean single-device snapshot.
+	if _, err := svc.bridges.CreateBridge(ctx, "ext-test", "u-it-pbuf", "itest-pbuf", "light"); err != nil {
+		t.Fatalf("CreateBridge: %v", err)
 	}
 
 	apiConn := waitDial(t, "tcp", fmt.Sprintf("127.0.0.1:%d", vdcPort), 3*time.Second)

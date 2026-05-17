@@ -4,7 +4,7 @@ import {
   Plus, Settings2, Trash2, X, FlaskConical, ScrollText,
   Home, Wifi, Cpu, Lightbulb, Antenna, Box,
   Boxes, Link2, Monitor, AlertTriangle,
-  RefreshCw, Radar, Power, PowerOff, Pause, Play,
+  RefreshCw, Radar, Power, PowerOff, Pause, Play, Terminal,
 } from 'lucide-react'
 import {
   api,
@@ -37,6 +37,7 @@ const PLUGIN_VISUAL: Record<string, PluginVisual> = {
   tasmota:       { Icon: Cpu,       tone: 'bg-sky-500/10 text-sky-600 dark:text-sky-400',            dot: '#0ea5e9' },
   wled:          { Icon: Lightbulb, tone: 'bg-fuchsia-500/10 text-fuchsia-600 dark:text-fuchsia-400', dot: '#d946ef' },
   zigbee2mqtt:   { Icon: Antenna,   tone: 'bg-amber-500/10 text-amber-600 dark:text-amber-400',      dot: '#f59e0b' },
+  externaldevice:{ Icon: Terminal,  tone: 'bg-teal-500/10 text-teal-600 dark:text-teal-400',         dot: '#14b8a6' },
 }
 
 const DEFAULT_VISUAL: PluginVisual = {

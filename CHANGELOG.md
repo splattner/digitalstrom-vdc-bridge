@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.9](https://github.com/splattner/digitalstrom-vdc-bridge/compare/v0.1.8...v0.1.9) (2026-05-17)
+
+
+### Bug Fixes
+
+* websoket connetion inside ha app not working ([#42](https://github.com/splattner/digitalstrom-vdc-bridge/issues/42)) ([622474f](https://github.com/splattner/digitalstrom-vdc-bridge/commit/622474f80aa625d24a69df1fb9372d1ea844adec))
+
 ## [0.1.8](https://github.com/splattner/digitalstrom-vdc-bridge/compare/v0.1.7...v0.1.8) (2026-05-17)
 
 

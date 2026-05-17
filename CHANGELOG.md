@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.8](https://github.com/splattner/digitalstrom-vdc-bridge/compare/v0.1.7...v0.1.8) (2026-05-17)
+
+
+### Bug Fixes
+
+* use hostnetwork, otherwise mdns does not work ([#40](https://github.com/splattner/digitalstrom-vdc-bridge/issues/40)) ([67803f7](https://github.com/splattner/digitalstrom-vdc-bridge/commit/67803f7e3524c672148bd8c3620a5fa8d8eda050))
+
 ## [0.1.7](https://github.com/splattner/digitalstrom-vdc-bridge/compare/v0.1.6...v0.1.7) (2026-05-17)
 
 

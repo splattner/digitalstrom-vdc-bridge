@@ -15,7 +15,7 @@ func RegisterEntry() bridge.FactoryEntry {
 					Type: "select", Required: true,
 					OptionsSource:    "plugins",
 					PluginTypeFilter: "mqtt",
-					Help: "The MQTT broker plugin instance to use.",
+					Help:             "The MQTT broker plugin instance to use.",
 				},
 				{
 					Key: "baseTopic", Label: "Base topic",

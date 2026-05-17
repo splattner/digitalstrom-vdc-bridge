@@ -49,7 +49,8 @@ func Start(cfg Config) (*Advertiser, error) {
 		}
 		if errors.Is(err, ErrAvahiUnavailable) {
 			logging.Warn("dnssd_avahi_unavailable", logging.Fields{
-				"message": "avahi-daemon not found on D-Bus; falling back to direct multicast",
+				"message": "avahi-daemon not available; falling back to direct multicast (may not work inside a container without host_network)",
+				"reason":  err.Error(),
 			})
 			// fall through to zeroconf below
 		} else {

@@ -178,7 +178,7 @@ export interface PluginEvent {
 // (served at /api/hassio_ingress/<token>/). HashRouter keeps window.location.pathname
 // pointing at the ingress root, so stripping the trailing slash and appending
 // '/api' always yields the correct absolute path.
-const BASE = window.location.pathname.replace(/\/+$/, '') + '/api'
+export const BASE = window.location.pathname.replace(/\/+$/, '') + '/api'
 
 async function get<T>(path: string): Promise<T> {
   const res = await fetch(`${BASE}${path}`)

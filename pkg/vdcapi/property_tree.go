@@ -528,13 +528,27 @@ func buildDeviceProperties(dsuid string, d ExternalDeviceState, scenes *SceneSto
 		}
 	}
 
+	// Resolve device metadata: prefer plugin-supplied values, fall back to defaults.
+	modelName := d.ModelName
+	if modelName == "" {
+		modelName = tp.model
+	}
+	vendorName := d.VendorName
+	if vendorName == "" {
+		vendorName = "vdcgo"
+	}
+	modelVersion := d.ModelVersion
+	if modelVersion == "" {
+		modelVersion = "1.0"
+	}
+
 	return map[string]any{
 		"dSUID":              dsuid,
 		"type":               "vdSD",
 		"name":               name,
-		"model":              tp.model,
+		"model":              modelName,
 		"modelUID":           "vdcgo-" + tp.kind,
-		"modelVersion":       "1.0",
+		"modelVersion":       modelVersion,
 		"hardwareVersion":    "",
 		"hardwareGuid":       "",
 		"hardwareModelGuid":  "",
@@ -542,7 +556,7 @@ func buildDeviceProperties(dsuid string, d ExternalDeviceState, scenes *SceneSto
 		"oemModelGuid":       "",
 		"vendorId":           "",
 		"subdevIdx":          "",
-		"vendorName":         "vdcgo",
+		"vendorName":         vendorName,
 		"configURL":          "",
 		"primaryGroup":       primaryGroupForKind(tp.kind),
 		"deviceClass":        "vdcgo-" + tp.kind,

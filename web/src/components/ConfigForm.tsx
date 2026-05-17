@@ -164,6 +164,17 @@ function renderControl(
         />
       )
     case 'select':
+      if (field.optionsSource === 'plugins') {
+        return (
+          <PluginsSelectControl
+            field={field}
+            id={id}
+            value={value == null ? '' : String(value)}
+            onChange={onChange}
+            disabled={disabled}
+          />
+        )
+      }
       return (
         <select
           id={id}
@@ -222,6 +233,89 @@ function renderControl(
         />
       )
   }
+}
+
+/** Select rendered as a dropdown populated from the live list of plugin
+ *  instances, optionally filtered by `field.pluginTypeFilter`. */
+function PluginsSelectControl({
+  field,
+  id,
+  value,
+  onChange,
+  disabled,
+}: {
+  field: ConfigFieldSchema
+  id: string
+  value: string
+  onChange: (v: unknown) => void
+  disabled?: boolean
+}) {
+  const baseInput =
+    'w-full border rounded px-2 py-1 text-sm bg-background focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50 disabled:cursor-not-allowed'
+
+  const [opts, setOpts] = useState<{ value: string; label: string }[] | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    api
+      .plugins()
+      .then((plugins) => {
+        if (cancelled) return
+        const filtered = field.pluginTypeFilter
+          ? plugins.filter((p) => p.type === field.pluginTypeFilter)
+          : plugins
+        setOpts(filtered.map((p) => ({ value: p.id, label: p.id })))
+      })
+      .catch((e: unknown) => {
+        if (!cancelled) setErr(e instanceof Error ? e.message : String(e))
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [field.pluginTypeFilter])
+
+  if (err) {
+    return <p className="text-xs text-destructive">Failed to load plugins: {err}</p>
+  }
+  if (opts === null) {
+    return <p className="text-xs text-muted-foreground">Loading…</p>
+  }
+
+  // Keep current value selectable even if the plugin was removed.
+  const visible = [...opts]
+  if (value && !visible.some((o) => o.value === value)) {
+    visible.unshift({ value, label: `${value} (not found)` })
+  }
+
+  if (visible.length === 0) {
+    return (
+      <p className="text-xs text-muted-foreground italic border rounded px-2 py-1.5 bg-muted/30">
+        No{field.pluginTypeFilter ? ` ${field.pluginTypeFilter}` : ''} plugins configured yet.
+      </p>
+    )
+  }
+
+  return (
+    <select
+      id={id}
+      value={value}
+      disabled={disabled}
+      onChange={(e) => onChange(e.target.value)}
+      className={baseInput}
+    >
+      {!value && (
+        <option value="" disabled>
+          Select…
+        </option>
+      )}
+      {visible.map((o) => (
+        <option key={o.value} value={o.value}>
+          {o.label}
+        </option>
+      ))}
+    </select>
+  )
 }
 
 /** Coerce a value to a string[]. Accepts string[], comma-separated string,

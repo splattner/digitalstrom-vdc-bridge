@@ -12,6 +12,7 @@ const (
 	EventSensorDescriptor      = "sensor_descriptor"
 	EventBinaryInputDescriptor = "binary_input_descriptor"
 	EventActive                = "active"
+	EventDeviceMeta            = "device_meta"
 )
 
 // SensorDescriptor describes the metadata of a single sensor input on a device.
@@ -66,4 +67,8 @@ type Event struct {
 	SensorDescriptor      *SensorDescriptor      // populated for EventSensorDescriptor
 	BinaryInputDescriptor *BinaryInputDescriptor // populated for EventBinaryInputDescriptor
 	ButtonDescriptor      *ButtonDescriptor      // populated for EventButtonDescriptor
+	// Device metadata fields — populated for EventDeviceMeta (and optionally EventInit).
+	VendorName   string
+	ModelName    string
+	ModelVersion string
 }

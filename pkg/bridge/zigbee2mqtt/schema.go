@@ -11,10 +11,11 @@ func RegisterEntry() bridge.FactoryEntry {
 		Schema: bridge.ConfigSchema{
 			Fields: []bridge.ConfigField{
 				{
-					Key: "broker", Label: "MQTT broker plugin id",
-					Type: "string", Required: true,
-					Placeholder: "mqtt",
-					Help:        "The id of the MQTT plugin instance to use (configure that plugin separately).",
+					Key: "broker", Label: "MQTT broker",
+					Type: "select", Required: true,
+					OptionsSource:    "plugins",
+					PluginTypeFilter: "mqtt",
+					Help: "The MQTT broker plugin instance to use.",
 				},
 				{
 					Key: "baseTopic", Label: "Base topic",

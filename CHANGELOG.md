@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.1.7](https://github.com/splattner/digitalstrom-vdc-bridge/compare/v0.1.6...v0.1.7) (2026-05-17)
+
+
+### Features
+
+* exteral device api as plugin ([#37](https://github.com/splattner/digitalstrom-vdc-bridge/issues/37)) ([040c114](https://github.com/splattner/digitalstrom-vdc-bridge/commit/040c114408c2c38432d1f035132674164f80dd16))
+* select mqtt broker in frontend, forward vendor / model, show ha intgration ([#39](https://github.com/splattner/digitalstrom-vdc-bridge/issues/39)) ([8d22b5d](https://github.com/splattner/digitalstrom-vdc-bridge/commit/8d22b5d4cc2902c274e1719303a0f430dc091321))
+
+
+### Bug Fixes
+
+* fallback to direct mdsn if avahi not available ([#35](https://github.com/splattner/digitalstrom-vdc-bridge/issues/35)) ([2ab00a7](https://github.com/splattner/digitalstrom-vdc-bridge/commit/2ab00a72920a0b53a9281560042b0a301c78b97a))
+
 ## [0.1.6](https://github.com/splattner/digitalstrom-vdc-bridge/compare/v0.1.5...v0.1.6) (2026-05-16)
 
 

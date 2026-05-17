@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { api, type Device } from '@/api/client'
+import { api, BASE, type Device } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { useUIPrefs } from '@/lib/uiPrefs'
 
@@ -328,7 +328,7 @@ export default function ProtocolPage() {
 
   const connect = useCallback(() => {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-    const ws = new WebSocket(`${proto}://${location.host}/api/debug/pbuf`)
+    const ws = new WebSocket(`${proto}://${location.host}${BASE}/debug/pbuf`)
     wsRef.current = ws
 
     ws.onopen = () => setConnected(true)

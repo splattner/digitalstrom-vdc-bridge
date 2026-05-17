@@ -57,9 +57,12 @@ export interface ConfigFieldSchema {
   required?: boolean
   placeholder?: string
   options?: { value: string; label: string }[]
-  /** Dynamic source for select/multiselect options. "plugin" → fetched from
-   * GET /api/plugins/{id}/suggest/{key} when an instance id is available. */
-  optionsSource?: 'plugin' | ''
+  /** Dynamic source for select/multiselect options.
+   *  - "plugin"  → fetched from GET /api/plugins/{id}/suggest/{key} when an instance id is available.
+   *  - "plugins" → lists all plugin instances, filtered by pluginTypeFilter. Renders as a dropdown. */
+  optionsSource?: 'plugin' | 'plugins' | ''
+  /** Limits "plugins" source to instances of this plugin type (e.g. "mqtt"). */
+  pluginTypeFilter?: string
   children?: ConfigFieldSchema[]
   min?: number
   max?: number

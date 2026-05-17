@@ -585,6 +585,15 @@ func (p *Plugin) activate(sub *deviceSub, dev *discoveredDevice) {
 		_ = p.host.ReAnnounce(ctx, sub.mapping.DSUID)
 	}
 
+	// Forward manufacturer/model/firmware metadata to digitalSTROM.
+	if def := dev.dev.Definition; def != nil {
+		_ = p.host.UpdateDeviceMeta(context.Background(), sub.mapping.DSUID,
+			def.Vendor, def.Model, dev.dev.SoftwareBuildID)
+	} else if dev.dev.SoftwareBuildID != "" {
+		_ = p.host.UpdateDeviceMeta(context.Background(), sub.mapping.DSUID,
+			"", "", dev.dev.SoftwareBuildID)
+	}
+
 	logging.Info("zigbee2mqtt_subscribed", logging.Fields{
 		"dsuid":    sub.mapping.DSUID,
 		"ieee":     sub.ieee,

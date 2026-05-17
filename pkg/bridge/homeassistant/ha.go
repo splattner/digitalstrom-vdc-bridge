@@ -199,10 +199,17 @@ func (p *Plugin) Subscribe(ctx context.Context, m bridge.Mapping) error {
 	p.subscribed[m.DSUID] = m
 	p.subByEntity[m.RemoteEntityID] = m.DSUID
 	state, hasState := p.latestStates[m.RemoteEntityID]
+	manufacturer, model, swVersion := p.registries.deviceMeta(m.RemoteEntityID)
 	p.mu.Unlock()
 
 	p.host.Log(bridge.LevelInfo, bridge.CodeSubscribeOK, "entity subscribed",
 		map[string]any{"dsuid": m.DSUID, "entity_id": m.RemoteEntityID})
+
+	// Forward device metadata to digitalSTROM (HA device registry provides
+	// manufacturer, model, and sw_version). Empty strings are silently ignored.
+	if manufacturer != "" || model != "" || swVersion != "" {
+		_ = p.host.UpdateDeviceMeta(ctx, m.DSUID, manufacturer, model, swVersion)
+	}
 
 	if hasState {
 		p.pushState(ctx, m, state)

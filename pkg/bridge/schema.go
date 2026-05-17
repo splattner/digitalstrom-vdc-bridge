@@ -29,9 +29,15 @@ type ConfigField struct {
 	// "multiselect" when the choices are static.
 	Options []SelectOption `json:"options,omitempty"`
 	// OptionsSource declares a dynamic source for "select" / "multiselect"
-	// fields. Currently supported: "plugin" — the UI fetches options from
-	// GET /api/plugins/{id}/suggest/{key}. When empty, Options is used.
+	// fields. Supported values:
+	//   "plugin"  — the UI fetches options from GET /api/plugins/{id}/suggest/{key}.
+	//   "plugins" — the UI lists all plugin instances, optionally filtered by
+	//               PluginTypeFilter. Renders as a dropdown of plugin IDs.
+	// When empty, Options is used.
 	OptionsSource string `json:"optionsSource,omitempty"`
+	// PluginTypeFilter limits the options when OptionsSource is "plugins" to
+	// plugin instances whose type matches this string (e.g. "mqtt").
+	PluginTypeFilter string `json:"pluginTypeFilter,omitempty"`
 	// Children is the nested field list for Type "object".
 	Children []ConfigField `json:"children,omitempty"`
 	// Min/Max are optional numeric bounds for Type "int".

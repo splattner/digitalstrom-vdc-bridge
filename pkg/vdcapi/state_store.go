@@ -26,6 +26,10 @@ type ExternalDeviceState struct {
 	BinaryInputDescriptors map[int]runtime.BinaryInputDescriptor
 	ButtonDescriptors      map[int]runtime.ButtonDescriptor
 	Active                 bool
+	// Device metadata — forwarded to digitalSTROM as vendorName / model / modelVersion.
+	VendorName   string
+	ModelName    string
+	ModelVersion string
 }
 
 type ExternalSnapshot struct {
@@ -231,6 +235,20 @@ func (s *StateStore) HandleEvent(e runtime.Event) {
 			s.devices[key] = d
 			u := StateUpdate{Type: runtime.EventActive, Device: d}
 			update = &u
+		}
+	case runtime.EventDeviceMeta:
+		if key, ok := s.resolveKey(e); ok {
+			d := s.devices[key]
+			if e.VendorName != "" {
+				d.VendorName = e.VendorName
+			}
+			if e.ModelName != "" {
+				d.ModelName = e.ModelName
+			}
+			if e.ModelVersion != "" {
+				d.ModelVersion = e.ModelVersion
+			}
+			s.devices[key] = d
 		}
 	}
 	s.mu.Unlock()

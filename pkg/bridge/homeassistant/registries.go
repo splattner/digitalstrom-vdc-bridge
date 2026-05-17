@@ -29,6 +29,8 @@ type haDevice struct {
 	AreaID       string     `json:"area_id"`
 	Manufacturer string     `json:"manufacturer"`
 	Model        string     `json:"model"`
+	SWVersion    string     `json:"sw_version"`
+	HWVersion    string     `json:"hw_version"`
 	Identifiers  [][]string `json:"-"`
 	RawIDs       [][]any    `json:"identifiers"`
 	ViaDeviceID  string     `json:"via_device_id"`
@@ -178,14 +180,34 @@ func decodeListResult(raw json.RawMessage, dst any) error {
 	return json.Unmarshal(env.Result, dst)
 }
 
+// deviceMeta returns the manufacturer, model, and sw_version for the HA device
+// associated with entityID. Any field absent from the registry is returned as "".
+func (r haRegistries) deviceMeta(entityID string) (manufacturer, model, swVersion string) {
+	ent, ok := r.Entities[entityID]
+	if !ok {
+		return
+	}
+	dev, ok := r.Devices[ent.DeviceID]
+	if !ok {
+		return
+	}
+	manufacturer = dev.Manufacturer
+	model = dev.Model
+	swVersion = dev.SWVersion
+	return
+}
+
 // resolveExtras returns plugin-specific attributes for an entity (device name,
-// area name, manufacturer, model). Fields that resolve to empty are omitted.
+// area name, manufacturer, model, integration). Fields that resolve to empty are omitted.
 func (r haRegistries) resolveExtras(entityID string) map[string]any {
 	out := map[string]any{}
 	ent, ok := r.Entities[entityID]
 	areaID := ""
 	if ok {
 		areaID = ent.AreaID
+		if ent.Platform != "" {
+			out["integration"] = ent.Platform
+		}
 		if dev, ok := r.Devices[ent.DeviceID]; ok {
 			devName := dev.NameByUser
 			if devName == "" {

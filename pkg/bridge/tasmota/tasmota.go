@@ -390,6 +390,12 @@ func (p *Plugin) activate(sub *deviceSub, dev *discoveredDevice) {
 	// Ask the device for its current state — Tasmota responds via stat/RESULT.
 	_ = p.publish(context.Background(), dev.cfg.cmndTopic("STATE"), nil)
 
+	// Forward hardware model and firmware version to digitalSTROM.
+	if dev.cfg.Model != "" || dev.cfg.SwVer != "" {
+		_ = p.host.UpdateDeviceMeta(context.Background(), sub.mapping.DSUID,
+			"Tasmota", dev.cfg.Model, dev.cfg.SwVer)
+	}
+
 	logging.Info("tasmota_subscribed", logging.Fields{
 		"dsuid": sub.mapping.DSUID,
 		"mac":   sub.mac,

@@ -52,6 +52,11 @@ type Host interface {
 	// SetBinaryInputDescriptor publishes metadata (name, sensorFunction) for a binary input.
 	// Should be called once per input so the vDSM/dSS UI classifies the input correctly.
 	SetBinaryInputDescriptor(ctx context.Context, dsuid string, inputIndex int, desc BinaryInputDescriptor) error
+	// UpdateDeviceMeta updates vendor/model/version metadata for a device.
+	// Call this once per Subscribe when the plugin has manufacturer/model/firmware
+	// information (e.g. from Z2M device definition, HA device registry, Tasmota
+	// status response). Empty strings are ignored (existing values preserved).
+	UpdateDeviceMeta(ctx context.Context, dsuid, vendorName, modelName, modelVersion string) error
 	// ReAnnounce triggers a full device property re-announcement to the vDSM.
 	// Call this after pushing descriptor metadata (sensor types, binary input functions)
 	// that was not yet available when the device was first announced, so the vDSM/dSS
@@ -236,6 +241,17 @@ func (h *hostImpl) UpdateActive(_ context.Context, dsuid string, active bool) er
 		Type:     runtime.EventActive,
 		UniqueID: dsuid,
 		Active:   active,
+	})
+	return nil
+}
+
+func (h *hostImpl) UpdateDeviceMeta(_ context.Context, dsuid, vendorName, modelName, modelVersion string) error {
+	h.state.HandleEvent(runtime.Event{
+		Type:         runtime.EventDeviceMeta,
+		UniqueID:     dsuid,
+		VendorName:   vendorName,
+		ModelName:    modelName,
+		ModelVersion: modelVersion,
 	})
 	return nil
 }

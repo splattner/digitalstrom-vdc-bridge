@@ -77,7 +77,7 @@ export default function Layout() {
         {/* Brand */}
         <div className="flex items-center gap-2.5 px-4 py-4">
           <img
-            src="/logo.png"
+            src={`${import.meta.env.BASE_URL}logo.png`}
             alt="Digitalstrom vDC Bridge"
             className="h-9 w-9 rounded-md object-contain bg-white/5 p-0.5"
           />

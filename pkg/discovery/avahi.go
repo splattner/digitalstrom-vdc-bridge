@@ -36,7 +36,9 @@ type avahiHandle struct {
 func startViaAvahi(cfg Config) (*avahiHandle, error) {
 	conn, err := dbus.ConnectSystemBus()
 	if err != nil {
-		return nil, fmt.Errorf("connect to system dbus: %w", err)
+		// D-Bus itself is not accessible — treat as avahi unavailable so the
+		// caller can fall back gracefully instead of hard-failing.
+		return nil, fmt.Errorf("%w: connect to system D-Bus: %v", ErrAvahiUnavailable, err)
 	}
 
 	// Check whether avahi-daemon is actually running before going further.
@@ -45,7 +47,7 @@ func startViaAvahi(cfg Config) (*avahiHandle, error) {
 	var nameOwner string
 	if err := conn.BusObject().Call("org.freedesktop.DBus.GetNameOwner", 0, avahiBusName).Store(&nameOwner); err != nil {
 		_ = conn.Close()
-		return nil, ErrAvahiUnavailable
+		return nil, fmt.Errorf("%w: org.freedesktop.Avahi not registered on system D-Bus: %v", ErrAvahiUnavailable, err)
 	}
 
 	// Ask Avahi to create a new empty entry group.

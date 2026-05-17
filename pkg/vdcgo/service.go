@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/splattner/vdcgo/pkg/bridge"
+	"github.com/splattner/vdcgo/pkg/bridge/externaldevice"
 	"github.com/splattner/vdcgo/pkg/bridge/homeassistant"
 	mqttplugin "github.com/splattner/vdcgo/pkg/bridge/mqtt"
 	"github.com/splattner/vdcgo/pkg/bridge/tasmota"
@@ -18,7 +19,6 @@ import (
 	"github.com/splattner/vdcgo/pkg/discovery"
 	"github.com/splattner/vdcgo/pkg/httpapi"
 	"github.com/splattner/vdcgo/pkg/logging"
-	"github.com/splattner/vdcgo/pkg/server"
 	mqttsvc "github.com/splattner/vdcgo/pkg/services/mqtt"
 	"github.com/splattner/vdcgo/pkg/vdcapi"
 )
@@ -30,7 +30,6 @@ var Version = "dev"
 
 // Config defines daemon/service behavior.
 type Config struct {
-	Listen       string
 	NonLocal     bool
 	VdcAPIPort   int
 	EnableVdcAPI bool
@@ -55,9 +54,8 @@ type Config struct {
 	PluginConfigs []bridge.PluginConfig
 }
 
-// Service runs the external device API host.
+// Service runs the bridge and vDC API host.
 type Service struct {
-	srv        *server.Server
 	cfg        Config
 	announce   *discovery.Advertiser
 	state      *vdcapi.StateStore
@@ -180,15 +178,6 @@ func NewService(cfg Config) (*Service, error) {
 		}
 	}
 
-	srv, err := server.New(server.Config{
-		Listen:   cfg.Listen,
-		NonLocal: cfg.NonLocal,
-		OnEvent:  state.HandleEvent,
-	})
-	if err != nil {
-		return nil, err
-	}
-
 	// Build bridge registry (always created, even if no plugins are configured).
 	mappings := bridge.NewMappingStore()
 	if cfg.DataDir != "" {
@@ -203,6 +192,7 @@ func NewService(cfg Config) (*Service, error) {
 
 	// Register built-in plugin factories with full FactoryEntry metadata so the
 	// HTTP API / web UI can render schema-driven config forms.
+	bridgeRegistry.Register(externaldevice.PluginType, externaldevice.RegisterEntry())
 	bridgeRegistry.Register(mqttplugin.PluginType, mqttplugin.RegisterEntry())
 	bridgeRegistry.Register(homeassistant.PluginType, homeassistant.RegisterEntry())
 	bridgeRegistry.Register(tasmota.PluginType, tasmota.RegisterEntry())
@@ -223,12 +213,9 @@ func NewService(cfg Config) (*Service, error) {
 	bridgeRegistry.SetEventSink(eventBuf)
 
 	// Create the service skeleton so closures below can capture it.
-	svc := &Service{srv: srv, cfg: cfg, state: state, scenes: scenes, config: configStore, bridges: bridgeRegistry}
+	svc := &Service{cfg: cfg, state: state, scenes: scenes, config: configStore, bridges: bridgeRegistry}
 
-	// Wrap the external-device server with a bridge-aware commander so that
-	// commands targeting bridged devices are dispatched to the owning plugin
-	// instead of failing with "device not connected".
-	cmdr := bridge.NewCommander(bridgeRegistry, srv)
+	cmdr := bridge.NewCommander(bridgeRegistry, nil)
 
 	// Pre-create PbufServer so SessionInfo can read live session state.
 	if cfg.EnableVdcAPI {
@@ -336,14 +323,6 @@ func (s *Service) Run(ctx context.Context) error {
 			}
 		}()
 	}
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		if err := s.srv.Run(runCtx); err != nil {
-			errCh <- err
-		}
-	}()
 
 	// Start bridge plugins and restore persisted mappings.
 	if err := s.bridges.Start(runCtx, s.cfg.PluginConfigs); err != nil {

@@ -36,6 +36,16 @@ type Host interface {
 	// Should be called once per sensor (e.g. on the first state push) so the
 	// vDSM/dSS UI can render the value with the correct label and unit.
 	SetSensorDescriptor(ctx context.Context, dsuid string, sensorIndex int, desc SensorDescriptor) error
+	// SetButtonDescriptor publishes metadata (type, element, group) for a button input.
+	// Should be called once per button so the vDSM/dSS UI classifies the button correctly.
+	// If index is not yet in the button map, a zero-value state entry is created on first update.
+	SetButtonDescriptor(ctx context.Context, dsuid string, buttonIndex int, desc ButtonDescriptor) error
+	// AnnounceRichDevice registers a device and atomically pushes all descriptor
+	// metadata (button, sensor, binary-input) in one call, followed by a ReAnnounce
+	// so the vDSM re-queries all configuration properties. Use this instead of
+	// separate AnnounceDevice + SetXxxDescriptor + ReAnnounce calls when the full
+	// descriptor is known up front (e.g. in an external-device plugin's Discover).
+	AnnounceRichDevice(ctx context.Context, m Mapping, d DeviceDescriptor) error
 	// UpdateInput pushes a binary input state change for a device.
 	// value 1.0 = active/true, 0.0 = inactive/false.
 	UpdateInput(ctx context.Context, dsuid string, inputIndex int, value float64) error
@@ -64,6 +74,9 @@ type SensorDescriptor = runtime.SensorDescriptor
 
 // BinaryInputDescriptor is re-exported from the runtime package for plugin use.
 type BinaryInputDescriptor = runtime.BinaryInputDescriptor
+
+// ButtonDescriptor is re-exported from the runtime package for plugin use.
+type ButtonDescriptor = runtime.ButtonDescriptor
 
 // hostImpl wires bridge callbacks into the shared vdcapi.StateStore.
 type hostImpl struct {
@@ -178,6 +191,43 @@ func (h *hostImpl) SetBinaryInputDescriptor(_ context.Context, dsuid string, inp
 		Index:                 inputIndex,
 		BinaryInputDescriptor: &d,
 	})
+	return nil
+}
+
+func (h *hostImpl) SetButtonDescriptor(_ context.Context, dsuid string, buttonIndex int, desc ButtonDescriptor) error {
+	d := desc
+	h.state.HandleEvent(runtime.Event{
+		Type:             runtime.EventButtonDescriptor,
+		UniqueID:         dsuid,
+		Index:            buttonIndex,
+		ButtonDescriptor: &d,
+	})
+	return nil
+}
+
+func (h *hostImpl) AnnounceRichDevice(ctx context.Context, m Mapping, desc DeviceDescriptor) error {
+	if err := h.AnnounceDevice(ctx, m); err != nil {
+		return err
+	}
+	for i, s := range desc.Sensors {
+		if err := h.SetSensorDescriptor(ctx, m.DSUID, i, s); err != nil {
+			return err
+		}
+	}
+	for i, inp := range desc.Inputs {
+		if err := h.SetBinaryInputDescriptor(ctx, m.DSUID, i, inp); err != nil {
+			return err
+		}
+	}
+	for i, b := range desc.Buttons {
+		if err := h.SetButtonDescriptor(ctx, m.DSUID, i, b); err != nil {
+			return err
+		}
+	}
+	hasDescriptors := len(desc.Sensors) > 0 || len(desc.Inputs) > 0 || len(desc.Buttons) > 0
+	if hasDescriptors {
+		return h.ReAnnounce(ctx, m.DSUID)
+	}
 	return nil
 }
 

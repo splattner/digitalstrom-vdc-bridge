@@ -24,6 +24,7 @@ type ExternalDeviceState struct {
 	SensorUpdatedAt        map[int]time.Time
 	SensorDescriptors      map[int]runtime.SensorDescriptor
 	BinaryInputDescriptors map[int]runtime.BinaryInputDescriptor
+	ButtonDescriptors      map[int]runtime.ButtonDescriptor
 	Active                 bool
 }
 
@@ -209,6 +210,18 @@ func (s *StateStore) HandleEvent(e runtime.Event) {
 				d.BinaryInputDescriptors = make(map[int]runtime.BinaryInputDescriptor)
 			}
 			d.BinaryInputDescriptors[e.Index] = *e.BinaryInputDescriptor
+			s.devices[key] = d
+		}
+	case runtime.EventButtonDescriptor:
+		if e.ButtonDescriptor == nil {
+			break
+		}
+		if key, ok := s.resolveKey(e); ok {
+			d := s.devices[key]
+			if d.ButtonDescriptors == nil {
+				d.ButtonDescriptors = make(map[int]runtime.ButtonDescriptor)
+			}
+			d.ButtonDescriptors[e.Index] = *e.ButtonDescriptor
 			s.devices[key] = d
 		}
 	case runtime.EventActive:

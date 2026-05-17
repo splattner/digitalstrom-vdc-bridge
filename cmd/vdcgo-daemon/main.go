@@ -13,8 +13,7 @@ import (
 )
 
 func main() {
-	listen := flag.String("listen", "8999", "TCP port or absolute Unix socket path")
-	nonLocal := flag.Bool("non-local", false, "allow non-local TCP clients")
+	nonLocal := flag.Bool("non-local", false, "allow non-local HTTP API clients")
 	vdcAPI := flag.Int("vdcapi-port", 0, "vDC API listen port (default: 8340)")
 	noVdcAPI := flag.Bool("novdcapi", false, "disable vDC API stub listener")
 	noDiscovery := flag.Bool("nodiscovery", false, "disable DNS-SD discovery advertisement")
@@ -29,7 +28,6 @@ func main() {
 	flag.Parse()
 
 	svc, err := vdcgo.NewService(vdcgo.Config{
-		Listen:       *listen,
 		NonLocal:     *nonLocal,
 		VdcAPIPort:   *vdcAPI,
 		EnableVdcAPI: !*noVdcAPI,
@@ -52,7 +50,6 @@ func main() {
 	defer stop()
 
 	logging.Info("daemon_start", logging.Fields{
-		"listen":        *listen,
 		"vdcapi_port":   svc.Config().VdcAPIPort,
 		"dns_discovery": !*noDiscovery,
 		"dsuid":         svc.Config().DSUID,

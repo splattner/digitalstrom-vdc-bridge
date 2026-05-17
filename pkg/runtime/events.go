@@ -6,6 +6,7 @@ const (
 	EventChannel               = "channel"
 	EventButton                = "button"
 	EventButtonAction          = "button_action"
+	EventButtonDescriptor      = "button_descriptor"
 	EventInput                 = "input"
 	EventSensor                = "sensor"
 	EventSensorDescriptor      = "sensor_descriptor"
@@ -26,6 +27,20 @@ type SensorDescriptor struct {
 	Resolution float64 // smallest reportable step
 	SIUnit     string  // SI unit code ("celsius", "percent", …)
 	Symbol     string  // display symbol ("°C", "%", …)
+}
+
+// ButtonDescriptor describes the metadata of a single button input on a device.
+// ButtonType uses the dS buttonType enum (0=undefined, 1=single, 2=two-way,
+// 3=4-way, 4=4-way+center, 5=8-way+center, 6=on-off switch).
+// Element identifies the direction/position within a multi-element button
+// (0=center/single, 1=down, 2=up, 3=left, 4=right, …).
+type ButtonDescriptor struct {
+	Name        string
+	ButtonID    int  // hardware button identifier (two-way buttons share same ButtonID)
+	ButtonType  int  // dS buttonType enum value
+	Element     int  // element within a multi-element button
+	Group       int  // primary color group (0 = device default)
+	LocalButton bool // if true, directly controls the device output
 }
 
 // BinaryInputDescriptor describes the metadata of a single binary input on a device.
@@ -50,4 +65,5 @@ type Event struct {
 	Connection            string
 	SensorDescriptor      *SensorDescriptor      // populated for EventSensorDescriptor
 	BinaryInputDescriptor *BinaryInputDescriptor // populated for EventBinaryInputDescriptor
+	ButtonDescriptor      *ButtonDescriptor      // populated for EventButtonDescriptor
 }

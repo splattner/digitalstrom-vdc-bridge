@@ -31,13 +31,14 @@ This project is heavily inspired by and builds upon the concepts and protocol im
 ```bash
 docker run -d \
   --name digitalstrom-vdc-bridge \
-  -p 8090:8090 \
-  -p 8999:8999 \
+  --network host \
   -v ./data:/data \
   ghcr.io/splattner/digitalstrom-vdc-bridge:latest
 ```
 
-Open **http://localhost:8090** for the web UI. In the digitalSTROM configurator, add an external vDC host pointing at `<docker-host>:8999`.
+Open **http://localhost:8090** for the web UI.
+
+> **`--network host` is required** for mDNS (DNS-SD) to work so the digitalSTROM Server can discover the bridge automatically. Without it, multicast traffic is isolated inside the Docker bridge network and the dSS will not find the bridge.
 
 ### Docker Compose
 
@@ -46,12 +47,12 @@ services:
   vdc-bridge:
     image: ghcr.io/splattner/digitalstrom-vdc-bridge:latest
     restart: unless-stopped
-    ports:
-      - "8090:8090"   # Web UI
-      - "8999:8999"   # vDC API (TCP) — point digitalSTROM here
+    network_mode: host   # required for mDNS discovery by the dSS
     volumes:
       - ./data:/data
 ```
+
+> With `network_mode: host` the container shares the host's network stack, which means the mDNS announcements are visible to the rest of the LAN and the digitalSTROM Server can discover the bridge without any manual configuration.
 
 ## Home Assistant Add-on
 
@@ -72,12 +73,12 @@ Then install **digitalSTROM vDC Bridge** from the add-on store. After starting t
 
 | Option | Default | Description |
 |---|---|---|
-| `description` | `digitalSTROM vDC Bridge` | Instance name advertised via DNS-SD |
-| `listen_port` | `8999` | TCP port for the vDC API connection from digitalSTROM |
-| `vdcapi_port` | `8340` | Internal vDC API stub port |
-| `non_local` | `true` | Accept vDC API connections from any host (required in a container) |
+| `description` | `digitalSTROM vDC Bridge` | Instance name advertised via DNS-SD and shown in the dSS configurator |
+| `vdcapi_port` | `8340` | Port the dSS connects to (protobuf vDC API). The mDNS advertisement includes this port so the dSS finds it automatically. |
+| `listen_port` | `8999` | Port for the [External Device API](docs/plugins/externaldevice.md) — only relevant if you connect external scripts to the bridge. Not used by the dSS itself. |
+| `non_local` | `true` | Accept vDC API connections from any host (required since the dSS is not on the same machine) |
 | `no_discovery` | `false` | Disable DNS-SD advertisement |
-| `no_auto` | `false` | Publish the vDC as `noauto` |
+| `no_auto` | `false` | Publish the vDC with the `noauto` flag |
 
 ## Build from Source
 
@@ -108,25 +109,26 @@ The resulting binary is `./vdcgo-daemon`.
 ```bash
 ./vdcgo-daemon \
   --non-local \
-  --listen 8999 \
   --http-listen :8090 \
   --datadir ./data
 ```
+
+The bridge advertises itself via mDNS on the default vDC API port (`8340`). The digitalSTROM Server discovers it automatically — no manual configuration in the dSS configurator is needed.
 
 ### Available flags
 
 | Flag | Default | Description |
 |---|---|---|
-| `--listen` | `8999` | TCP port (or Unix socket path) for the external device API |
-| `--non-local` | false | Accept connections from non-localhost clients |
 | `--http-listen` | *(disabled)* | Address for the web UI, e.g. `:8090` |
 | `--datadir` | *(none)* | Persist scenes, mappings, and plugin configs to this directory |
+| `--vdcapi-port` | `8340` | Port the dSS connects to (advertised via DNS-SD) |
 | `--dsuid` | *(generated)* | Fixed 34-hex-digit dSUID (auto-generated and persisted if omitted) |
-| `--description` | `vdcgo external` | DNS-SD instance description |
-| `--vdcapi-port` | 8340 | vDC API stub port |
-| `--novdcapi` | false | Disable the vDC API stub |
+| `--description` | `vdcgo external` | DNS-SD instance name shown in the dSS configurator |
+| `--non-local` | false | Accept vDC API connections from non-localhost clients |
 | `--nodiscovery` | false | Disable DNS-SD advertisement |
+| `--avahi-dbus` | false | Use Avahi D-Bus for DNS-SD (useful in containers with host D-Bus mounted) |
 | `--noauto` | false | Advertise vDC as `noauto` |
+| `--novdcapi` | false | Disable the vDC API listener entirely |
 
 ## Plugin Configuration
 

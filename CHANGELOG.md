@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.10](https://github.com/splattner/digitalstrom-vdc-bridge/compare/v0.1.9...v0.1.10) (2026-05-18)
+
+
+### Features
+
+* activity log for bridged devices ([#45](https://github.com/splattner/digitalstrom-vdc-bridge/issues/45)) ([7a25f44](https://github.com/splattner/digitalstrom-vdc-bridge/commit/7a25f442878a39911511dd33aae3f2f221e6bd26))
+
 ## [0.1.9](https://github.com/splattner/digitalstrom-vdc-bridge/compare/v0.1.8...v0.1.9) (2026-05-17)
 
 

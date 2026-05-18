@@ -212,10 +212,16 @@ func NewService(cfg Config) (*Service, error) {
 	eventBuf := bridge.NewEventBuffer(500, 2000)
 	bridgeRegistry.SetEventSink(eventBuf)
 
-	// Create the service skeleton so closures below can capture it.
-	svc := &Service{cfg: cfg, state: state, scenes: scenes, config: configStore, bridges: bridgeRegistry}
+	// Create the ring-buffer that records per-device activity events (channel
+	// changes, active-state transitions) with source attribution (vdsm vs plugin).
+	activityBuf := bridge.NewActivityBuffer(200, 2000)
+	bridgeRegistry.SetActivityBuffer(activityBuf)
 
 	cmdr := bridge.NewCommander(bridgeRegistry, nil)
+	cmdr.SetActivityBuffer(activityBuf)
+
+	// Create the service skeleton so closures below can capture it.
+	svc := &Service{cfg: cfg, state: state, scenes: scenes, config: configStore, bridges: bridgeRegistry}
 
 	// Pre-create PbufServer so SessionInfo can read live session state.
 	if cfg.EnableVdcAPI {
@@ -247,8 +253,9 @@ func NewService(cfg Config) (*Service, error) {
 			State:       state,
 			Config:      configStore,
 			Scenes:      scenes,
-			Bridges:     bridgeRegistry,
-			EventBuffer: eventBuf,
+			Bridges:        bridgeRegistry,
+			EventBuffer:    eventBuf,
+			ActivityBuffer: activityBuf,
 			VdcAPIPort:  cfg.VdcAPIPort,
 			EnableDNSSD: cfg.EnableDNSSD,
 			NonLocal:    cfg.NonLocal,

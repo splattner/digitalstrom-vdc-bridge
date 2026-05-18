@@ -21,16 +21,17 @@ type Persister func(configs []PluginConfig) error
 
 // Registry manages plugin instances and the bridge mapping lifecycle.
 type Registry struct {
-	mu        sync.RWMutex
-	factories map[string]FactoryEntry // type → factory entry
-	instances map[string]Plugin       // id → running plugin
-	configs   map[string]PluginConfig // id → last-applied config
-	mappings  *MappingStore
-	host      Host
-	ctx       context.Context
-	notify    Notifier
-	persist   Persister
-	sink      EventSink
+	mu             sync.RWMutex
+	factories      map[string]FactoryEntry // type → factory entry
+	instances      map[string]Plugin       // id → running plugin
+	configs        map[string]PluginConfig // id → last-applied config
+	mappings       *MappingStore
+	host           Host
+	ctx            context.Context
+	notify         Notifier
+	persist        Persister
+	sink           EventSink
+	activityBuffer *ActivityBuffer
 }
 
 // SetNotifier installs a notifier callback. Safe to call before or after Start.
@@ -55,6 +56,22 @@ func (r *Registry) getSink() EventSink {
 	s := r.sink
 	r.mu.RUnlock()
 	return s
+}
+
+// SetActivityBuffer installs the ActivityBuffer used to record per-device activity.
+// Safe to call at any time; plugins created before this call will see it once started.
+func (r *Registry) SetActivityBuffer(ab *ActivityBuffer) {
+	r.mu.Lock()
+	r.activityBuffer = ab
+	r.mu.Unlock()
+}
+
+// getActivityBuffer returns the current ActivityBuffer under the read lock.
+func (r *Registry) getActivityBuffer() *ActivityBuffer {
+	r.mu.RLock()
+	ab := r.activityBuffer
+	r.mu.RUnlock()
+	return ab
 }
 
 // sinkEmit publishes a lifecycle PluginEvent to the EventSink (if set).
@@ -232,8 +249,9 @@ func (r *Registry) startPlugin(ctx context.Context, pc PluginConfig) error {
 	resolvedCfg := applyEnvOverlay(pc.ID, pc.Config)
 
 	p := entry.Factory(pc.ID)
-	// Wrap the shared host with a per-plugin facade that auto-tags Log events.
-	ph := &pluginHost{Host: r.host, pluginID: pc.ID, getSink: r.getSink}
+	// Wrap the shared host with a per-plugin facade that auto-tags Log events
+	// and records device activity to the ActivityBuffer.
+	ph := &pluginHost{Host: r.host, pluginID: pc.ID, getSink: r.getSink, getActivityBuffer: r.getActivityBuffer}
 	if err := p.Init(ctx, resolvedCfg, ph); err != nil {
 		r.sinkEmit(pc.ID, LevelError, CodeConnectFailed, "plugin init failed", map[string]any{"error": err.Error(), "type": pc.Type})
 		return err

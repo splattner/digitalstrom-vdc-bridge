@@ -13,7 +13,7 @@ import {
   Link2,
   Link2Off,
 } from 'lucide-react'
-import { api, connectEvents, type Device, type Mapping, type WsEvent } from '@/api/client'
+import { api, connectEvents, type Device, type Mapping, type WsEvent, type DeviceActivity } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { useToasts } from '@/lib/toasts'
 import { clusterSiblings, siblingKeyOf } from '@/lib/siblings'
@@ -563,7 +563,7 @@ export default function DevicesPage() {
 
 // ── ExpandedRow – inline foldable detail panel ───────────────────────────────
 
-type DetailTab = 'overview' | 'channels' | 'sensors' | 'buttons' | 'metadata'
+type DetailTab = 'overview' | 'channels' | 'sensors' | 'buttons' | 'metadata' | 'activity'
 
 function ExpandedRow({
   device,
@@ -589,6 +589,7 @@ function ExpandedRow({
       { id: 'channels' as DetailTab, label: 'Channels', count: channelCount },
       { id: 'sensors'  as DetailTab, label: 'Sensors',  count: sensorCount },
     ]),
+    { id: 'activity', label: 'Activity' },
     { id: 'metadata', label: 'Metadata' },
   ]
 
@@ -722,6 +723,10 @@ function ExpandedRow({
             />
           )}
 
+          {tab === 'activity' && (
+            <ActivityTab dsuid={device.dSUID} device={device} />
+          )}
+
           {tab === 'metadata' && (
             <div className="space-y-3">
               <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Raw properties</p>
@@ -754,6 +759,141 @@ function ExpandedRow({
           )}
         </div>
       </div>
+    </div>
+  )
+}
+
+// ── Scene name lookup ─────────────────────────────────────────────────────────
+// dS scene IDs — from p44vdc dsdefs.h and digitalSTROM public documentation.
+const DS_SCENE_NAMES: Record<number, string> = {
+  0:  'Auto-Off', 1: 'Area 1 Off', 2: 'Area 2 Off', 3: 'Area 3 Off', 4: 'Area 4 Off',
+  5:  'T0 Off', 6: 'T0 Preset 1', 7: 'T1 On', 8: 'T2 On', 9: 'T3 On', 10: 'T4 On',
+  11: 'T0 Preset 2', 12: 'T1 Preset 2', 13: 'T2 Preset 2', 14: 'T3 Preset 2', 15: 'T4 Preset 2',
+  17: 'T0 Preset 3', 18: 'T1 Preset 3', 19: 'T2 Preset 3', 20: 'T3 Preset 3', 21: 'T4 Preset 3',
+  22: 'T0 Preset 4', 23: 'T1 Preset 4', 24: 'T2 Preset 4', 25: 'T3 Preset 4', 26: 'T4 Preset 4',
+  32: 'Panic', 33: 'Standby', 34: 'Zone active', 35: 'Car is coming', 36: 'Bell',
+  37: 'Alarm 1', 38: 'Rush hour', 39: 'Alarm 2', 40: 'Fire', 41: 'Heartbeat',
+  42: 'Sleeping', 43: 'Wake up', 44: 'Present', 45: 'Absent', 46: 'Deep off',
+  47: 'Energy safe', 48: 'Standby', 49: 'Deep off', 50: 'Sleeping',
+  64: 'Decrease', 65: 'Increase', 66: 'Minimum', 67: 'Maximum',
+}
+
+function sceneName(id: number): string {
+  return DS_SCENE_NAMES[id] ?? `Scene ${id}`
+}
+
+// ── Channel name lookup from device channelDescriptions ───────────────────────
+
+/** Return the human-readable channel name from a device's channelDescriptions map. */
+function channelName(device: Device, channelIndex: number): string {
+  const descs = getChannelDescs(device)
+  return descs[String(channelIndex)]?.name ?? `ch ${channelIndex}`
+}
+
+/** Format a floating-point channel value compactly. */
+function fmtValue(val: number): string {
+  return val % 1 === 0 ? val.toFixed(0) : val.toFixed(2)
+}
+
+/** Relative time string, e.g. "3 s ago", "2 min ago". */
+function relativeTime(iso: string): string {
+  const diff = (Date.now() - new Date(iso).getTime()) / 1000
+  if (diff < 2)  return 'just now'
+  if (diff < 90) return `${Math.round(diff)} s ago`
+  if (diff < 5400) return `${Math.round(diff / 60)} min ago`
+  return `${Math.round(diff / 3600)} h ago`
+}
+
+// ── ActivityTab ───────────────────────────────────────────────────────────────
+
+function ActivityTab({ dsuid, device }: { dsuid: string; device: Device }) {
+  const qc = useQueryClient()
+  const { data: events = [], isLoading } = useQuery({
+    queryKey: ['deviceActivity', dsuid],
+    queryFn: () => api.deviceActivity(dsuid, { limit: 100 }),
+    refetchInterval: false,
+    staleTime: 0,
+  })
+
+  // Live updates via WebSocket
+  useEffect(() => {
+    const cleanup = connectEvents((e: WsEvent) => {
+      if (e.type === 'deviceActivity' && e.dsuid === dsuid) {
+        void qc.invalidateQueries({ queryKey: ['deviceActivity', dsuid] })
+      }
+    })
+    return cleanup
+  }, [dsuid, qc])
+
+  // Show newest first
+  const sorted = [...events].reverse()
+
+  if (isLoading) {
+    return <p className="text-xs text-muted-foreground">Loading activity…</p>
+  }
+
+  if (sorted.length === 0) {
+    return (
+      <div className="space-y-2">
+        <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Activity</p>
+        <p className="text-xs text-muted-foreground">No activity recorded yet. Channel changes and state updates will appear here.</p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-2">
+      <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Activity</p>
+      <div className="space-y-1 max-h-80 overflow-y-auto pr-1">
+        {sorted.map((ev) => (
+          <ActivityRow key={ev.seq} ev={ev} device={device} />
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function ActivityRow({ ev, device }: { ev: DeviceActivity; device: Device }) {
+  const isVdsm = ev.source === 'vdsm'
+
+  // Event description
+  let description = ''
+  let typeBadge = ''
+  if (ev.type === 'channel') {
+    const name = channelName(device, ev.index ?? 0)
+    const val  = ev.value != null ? fmtValue(ev.value) : '?'
+    description = `${name} → ${val}`
+    typeBadge   = 'channel'
+  } else if (ev.type === 'scene') {
+    description = sceneName(ev.scene ?? 0)
+    typeBadge   = 'scene'
+  } else if (ev.type === 'active') {
+    description = ev.active ? 'became active' : 'became inactive'
+    typeBadge   = 'active'
+  } else {
+    description = ev.type
+    typeBadge   = ev.type
+  }
+
+  const typeBadgeClass =
+    typeBadge === 'scene'  ? 'bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/30' :
+    typeBadge === 'active' ? 'bg-violet-500/10 text-violet-700 dark:text-violet-300 border-violet-500/30' :
+                             'bg-muted text-muted-foreground border-border'
+
+  return (
+    <div className="flex items-center gap-2 text-xs rounded-md px-2 py-1.5 hover:bg-muted/40">
+      {/* source direction */}
+      <span className={`text-[11px] font-mono shrink-0 w-24 ${isVdsm ? 'text-blue-700 dark:text-blue-400' : 'text-emerald-700 dark:text-emerald-400'}`}>
+        {isVdsm ? '← dSS' : `→ ${ev.pluginId ?? 'plugin'}`}
+      </span>
+      {/* type badge */}
+      <span className={`shrink-0 inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] font-medium leading-none ${typeBadgeClass}`}>
+        {typeBadge}
+      </span>
+      {/* description */}
+      <span className="flex-1 text-foreground/80 truncate">{description}</span>
+      {/* timestamp */}
+      <span className="text-[10px] text-muted-foreground shrink-0 tabular-nums">{relativeTime(ev.time)}</span>
     </div>
   )
 }

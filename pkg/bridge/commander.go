@@ -15,14 +15,20 @@ import (
 // dispatches the command to the owning plugin's Apply method, otherwise it
 // falls through to the wrapped fallback (typically the external-device server).
 type Commander struct {
-	registry *Registry
-	fallback vdcapi.Commander
-	timeout  time.Duration
+	registry       *Registry
+	fallback       vdcapi.Commander
+	timeout        time.Duration
+	activityBuffer *ActivityBuffer
 }
 
 // NewCommander wraps the registry around an existing fallback commander.
 func NewCommander(r *Registry, fallback vdcapi.Commander) *Commander {
 	return &Commander{registry: r, fallback: fallback, timeout: 5 * time.Second}
+}
+
+// SetActivityBuffer installs the ActivityBuffer for recording vdsm-originated commands.
+func (c *Commander) SetActivityBuffer(ab *ActivityBuffer) {
+	c.activityBuffer = ab
 }
 
 // SetLightLevel implements vdcapi.Commander.
@@ -68,6 +74,17 @@ func (c *Commander) SetChannelValue(uniqueID string, channelIndex int, value flo
 				"channel":   channelIndex,
 				"value":     value,
 			})
+			if c.activityBuffer != nil {
+				v := value
+				c.activityBuffer.Publish(DeviceActivity{
+					DSUID:    m.DSUID,
+					Source:   ActivitySourceVDSM,
+					PluginID: m.PluginID,
+					Type:     "channel",
+					Index:    channelIndex,
+					Value:    &v,
+				})
+			}
 			return nil
 		}
 	}

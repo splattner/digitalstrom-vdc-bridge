@@ -2,7 +2,7 @@
 
 A Go implementation of a [Virtual Device Connector (vDC)](https://developer.digitalstrom.com/Architecture/vDC-API.pdf) for the [digitalSTROM](https://www.digitalstrom.com/) smart home system, with a web-based configuration UI and a plugin system for bridging third-party devices.
 
-[Overview](docs/images/overview.png)
+![Overview](docs/images/overview.png)
 
 ## Features
 

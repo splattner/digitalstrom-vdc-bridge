@@ -172,6 +172,35 @@ Enable discovery on each Tasmota device: `SetOption19 1`
 | `broker` | Id of the MQTT plugin instance |
 | `baseTopic` | Z2M `mqtt.base_topic` (default: `zigbee2mqtt`) |
 
+## Tech Stack
+
+### Backend (Go)
+
+| Component | Role |
+|---|---|
+| [Go 1.23+](https://go.dev/) | Language and runtime |
+| [google/protobuf](https://pkg.go.dev/google.golang.org/protobuf) | vDC API wire protocol (protobuf over TCP) |
+| [gorilla/mux](https://github.com/gorilla/mux) / `net/http` | HTTP API and WebSocket server |
+| [paho.mqtt.golang](https://github.com/eclipse/paho.mqtt.golang) | MQTT client (Tasmota, Zigbee2MQTT) |
+| [grandcat/zeroconf](https://github.com/grandcat/zeroconf) / Avahi D-Bus | mDNS/DNS-SD advertisement |
+| `go:embed` | Web UI assets compiled into the binary |
+
+### Frontend (TypeScript)
+
+| Component | Role |
+|---|---|
+| [React 19](https://react.dev/) + [TypeScript](https://www.typescriptlang.org/) | UI framework |
+| [Vite](https://vitejs.dev/) | Build tool and dev server |
+| [Tailwind CSS v4](https://tailwindcss.com/) | Utility-first styling |
+| [shadcn/ui](https://ui.shadcn.com/) (Base UI) | Component primitives |
+| [TanStack Query v5](https://tanstack.com/query) | Data fetching and caching |
+| [React Router v7](https://reactrouter.com/) | Client-side routing (HashRouter) |
+| [Zustand](https://zustand-demo.pmnd.rs/) | Lightweight client state |
+| [Geist](https://vercel.com/font) | Variable font |
+| [lucide-react](https://lucide.dev/) | Icons |
+
+The frontend is built with `make web` and embedded directly into the Go binary via `go:embed` — there is no separate frontend server.
+
 ## Architecture
 
 ```

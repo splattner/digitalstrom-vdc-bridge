@@ -43,6 +43,10 @@ type Config struct {
 	// is forwarded to WebSocket clients as {type:"pluginEvent", ...} messages.
 	// May be nil; plugin event endpoints will return empty results.
 	EventBuffer *bridge.EventBuffer
+	// ActivityBuffer is the device activity ring buffer. If set, live events are
+	// forwarded to WebSocket clients as {type:"deviceActivity", ...} messages.
+	// May be nil; the activity endpoint will return empty results.
+	ActivityBuffer *bridge.ActivityBuffer
 
 	// Runtime metadata exposed by /api/settings (optional).
 	VdcAPIPort  int
@@ -145,6 +149,40 @@ func (s *Server) Run(ctx context.Context) error {
 		}()
 	}
 
+	// Fan device activity events to WebSocket clients.
+	if s.cfg.ActivityBuffer != nil {
+		go func() {
+			ch, cancel := s.cfg.ActivityBuffer.Subscribe()
+			defer cancel()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case ev, ok := <-ch:
+					if !ok {
+						return
+					}
+					s.hub.broadcast(wsEvent{
+						Type:  "deviceActivity",
+						DSUID: ev.DSUID,
+						Data: map[string]any{
+							"seq":      ev.Seq,
+							"time":     ev.Time,
+							"dsuid":    ev.DSUID,
+							"source":   ev.Source,
+							"pluginId": ev.PluginID,
+							"type":     ev.Type,
+							"index":    ev.Index,
+							"value":    ev.Value,
+							"scene":    ev.Scene,
+							"active":   ev.Active,
+						},
+					})
+				}
+			}
+		}()
+	}
+
 	ln, err := net.Listen("tcp", s.cfg.Listen)
 	if err != nil {
 		return err
@@ -206,6 +244,7 @@ func (s *Server) buildRouter() chi.Router {
 	r.Get("/api/devices", s.handleDevices)
 	r.Get("/api/devices/{dsuid}", s.handleDevice)
 	r.Put("/api/devices/{dsuid}/buttons/{idx}/group", s.handleSetButtonGroup)
+	r.Get("/api/devices/{dsuid}/activity", s.handleDeviceActivity)
 	r.Get("/api/events", s.handleEvents)
 	r.Get("/api/debug/pbuf", s.handleDebugPbuf)
 

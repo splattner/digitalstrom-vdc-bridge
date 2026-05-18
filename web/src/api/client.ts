@@ -173,6 +173,22 @@ export interface PluginEvent {
   fields?: Record<string, unknown>
 }
 
+export type ActivitySource = 'vdsm' | 'plugin'
+
+export interface DeviceActivity {
+  seq: number
+  time: string
+  dsuid: string
+  source: ActivitySource
+  pluginId?: string
+  /** "channel" | "scene" | "active" */
+  type: string
+  index?: number
+  value?: number
+  scene?: number
+  active?: boolean
+}
+
 // Compute the API base path from the current page URL so the app works both
 // standalone (served at /) and behind the Home Assistant ingress proxy
 // (served at /api/hassio_ingress/<token>/). HashRouter keeps window.location.pathname
@@ -248,6 +264,15 @@ export const api = {
     if (opts?.limit) p.set('limit', String(opts.limit))
     const qs = p.toString()
     return get<PluginEvent[]>(`/plugin-events${qs ? `?${qs}` : ''}`)
+  },
+  deviceActivity: (dsuid: string, opts?: { since?: number; limit?: number }) => {
+    const p = new URLSearchParams()
+    if (opts?.since) p.set('since', String(opts.since))
+    if (opts?.limit) p.set('limit', String(opts.limit))
+    const qs = p.toString()
+    return get<DeviceActivity[]>(
+      `/devices/${encodeURIComponent(dsuid)}/activity${qs ? `?${qs}` : ''}`,
+    )
   },
 }
 

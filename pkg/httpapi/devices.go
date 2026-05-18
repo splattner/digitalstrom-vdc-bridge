@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/splattner/vdcgo/pkg/bridge"
 	"github.com/splattner/vdcgo/pkg/vdcapi"
 )
 
@@ -100,4 +101,33 @@ func (s *Server) handleSetButtonGroup(w http.ResponseWriter, r *http.Request) {
 		"idx":   idx,
 		"group": body.Group,
 	})
+}
+
+// handleDeviceActivity returns recent activity events for a single device.
+//
+// GET /api/devices/{dsuid}/activity?since=<seq>&limit=<n>
+func (s *Server) handleDeviceActivity(w http.ResponseWriter, r *http.Request) {
+	dsuid := chi.URLParam(r, "dsuid")
+	if s.cfg.ActivityBuffer == nil {
+		writeJSON(w, http.StatusOK, []bridge.DeviceActivity{})
+		return
+	}
+	q := r.URL.Query()
+	var since uint64
+	if v := q.Get("since"); v != "" {
+		if n, err := strconv.ParseUint(v, 10, 64); err == nil {
+			since = n
+		}
+	}
+	limit := 200
+	if v := q.Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 1000 {
+			limit = n
+		}
+	}
+	evs := s.cfg.ActivityBuffer.Snapshot(dsuid, since, limit)
+	if evs == nil {
+		evs = []bridge.DeviceActivity{}
+	}
+	writeJSON(w, http.StatusOK, evs)
 }

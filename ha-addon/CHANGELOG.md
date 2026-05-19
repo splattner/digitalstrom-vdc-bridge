@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.12](https://github.com/splattner/digitalstrom-vdc-bridge/compare/v0.1.11...v0.1.12) (2026-05-19)
+
+
+### Features
+
+* add mobile friendly device page ([#54](https://github.com/splattner/digitalstrom-vdc-bridge/issues/54)) ([782b42f](https://github.com/splattner/digitalstrom-vdc-bridge/commit/782b42f3157e93778d375a0685b0c75b4f510a6b))
+
 ## [0.1.11](https://github.com/splattner/digitalstrom-vdc-bridge/compare/v0.1.10...v0.1.11) (2026-05-19)
 
 

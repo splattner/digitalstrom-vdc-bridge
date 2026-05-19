@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.11](https://github.com/splattner/digitalstrom-vdc-bridge/compare/v0.1.10...v0.1.11) (2026-05-19)
+
+
+### Features
+
+* add mobile friendly nav ([#52](https://github.com/splattner/digitalstrom-vdc-bridge/issues/52)) ([d6ebe00](https://github.com/splattner/digitalstrom-vdc-bridge/commit/d6ebe00bdc50dbdac32d3bded765c000c3dc2d7e))
+
 ## [0.1.10](https://github.com/splattner/digitalstrom-vdc-bridge/compare/v0.1.9...v0.1.10) (2026-05-18)
 
 

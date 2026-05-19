@@ -2,7 +2,7 @@ name: digitalSTROM vDC Bridge
 description: >-
   Virtual Device Connector (vDC) for digitalSTROM. Bridges MQTT, Tasmota,
   Zigbee2MQTT, WLED, and Home Assistant devices into the digitalSTROM ecosystem.
-version: 0.1.10
+version: 0.1.11
 slug: digitalstrom_vdc_bridge
 url: https://github.com/splattner/digitalstrom-vdc-bridge
 arch:

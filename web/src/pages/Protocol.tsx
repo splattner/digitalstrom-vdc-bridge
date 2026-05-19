@@ -394,7 +394,7 @@ export default function ProtocolPage() {
     <div className="flex flex-col h-full gap-3">
       {/* toolbar */}
       <div className="flex items-center gap-2 flex-wrap">
-        <h1 className="text-lg font-semibold mr-2">Protocol Debug</h1>
+        <h1 className="text-lg font-semibold mr-2 text-foreground">Protocol Debug</h1>
         <div className={`w-2 h-2 rounded-full ${connected ? 'bg-emerald-500' : 'bg-muted-foreground'}`} title={connected ? 'connected' : 'disconnected'} />
         <span className="text-xs text-muted-foreground">{connected ? 'live' : 'disconnected'}</span>
         <div className="flex-1" />

@@ -229,7 +229,7 @@ export default function PluginsPage() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-lg font-semibold">Plugins</h1>
+        <h1 className="text-lg font-semibold text-foreground">Plugins</h1>
         <div className="flex items-center gap-2">
           <button
             type="button"

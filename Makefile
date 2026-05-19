@@ -1,10 +1,13 @@
 .PHONY: all build web web-dev test clean
 
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+LDFLAGS := -X github.com/splattner/vdcgo/pkg/vdcgo.Version=$(VERSION)
+
 all: build
 
 # Build the frontend then the Go binary
 build: web
-	go build ./...
+	go build -ldflags "$(LDFLAGS)" ./...
 
 # Build the frontend (outputs to pkg/httpapi/webdist)
 web:

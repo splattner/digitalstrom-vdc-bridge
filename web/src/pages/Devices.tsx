@@ -332,7 +332,7 @@ export default function DevicesPage() {
   return (
     <div className="space-y-4">
       {/* ── Page header ── */}
-      <div className="flex items-start justify-between gap-4 flex-wrap">
+      <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
         <div>
           <div className="flex items-center gap-2.5">
             <h1 className="text-2xl font-semibold tracking-tight text-foreground">Devices</h1>
@@ -346,11 +346,11 @@ export default function DevicesPage() {
         </div>
 
         {/* search + filters */}
-        <div className="flex items-center gap-2">
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full sm:w-auto">
           <div className="relative">
             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
             <input
-              className="border rounded-md pl-8 pr-7 py-1.5 text-sm w-56 bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+              className="border rounded-md pl-8 pr-7 py-1.5 text-sm w-full sm:w-56 bg-background focus:outline-none focus:ring-1 focus:ring-ring"
               placeholder="Search name or dSUID…"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
@@ -428,7 +428,7 @@ export default function DevicesPage() {
                   <th className="w-8 px-2 py-3"></th>
                   <th className="text-left px-3 py-3 font-medium text-xs uppercase tracking-wider text-muted-foreground">Name</th>
                   <th className="text-left px-3 py-3 font-medium text-xs uppercase tracking-wider text-muted-foreground w-16">Active</th>
-                  <th className="text-left px-3 py-3 font-medium text-xs uppercase tracking-wider text-muted-foreground">Channels / Sensors</th>
+                  <th className="text-left px-3 py-3 font-medium text-xs uppercase tracking-wider text-muted-foreground hidden sm:table-cell">Channels / Sensors</th>
                   <th className="text-left px-3 py-3 font-medium text-xs uppercase tracking-wider text-muted-foreground w-40 hidden md:table-cell">Source</th>
                   <th className="w-16 px-3 py-3"></th>
                 </tr>
@@ -441,6 +441,7 @@ export default function DevicesPage() {
                     </td>
                   </tr>
                 )}
+
                 {ordered.map((d) => {
                   const isOpen = expanded === d.dSUID
                   const groupInfo = dsGroupInfo(d.primaryGroup)
@@ -503,7 +504,7 @@ export default function DevicesPage() {
                             title={d.active ? 'active' : 'inactive'}
                           />
                         </td>
-                        <td className="px-3 py-3">
+                        <td className="px-3 py-3 hidden sm:table-cell">
                           {isButtonDevice(d)
                             ? <ButtonRowBadge device={d} flashAt={buttonFlash[d.dSUID]} />
                             : <ChannelBadges device={d} />}
@@ -539,7 +540,7 @@ export default function DevicesPage() {
                       </tr>
                       {isOpen && (
                         <tr className="border-b last:border-0 bg-muted/20">
-                          <td colSpan={6} className="p-0">
+                          <td colSpan={6} className="p-0 max-w-[100vw]">
                             <ExpandedRow
                               device={d}
                               bridge={bridge}
@@ -594,8 +595,8 @@ function ExpandedRow({
   ]
 
   return (
-    <div className="px-6 py-5">
-      <div className="grid grid-cols-1 lg:grid-cols-[180px_1fr] gap-6">
+    <div className="px-3 py-4 md:px-6 md:py-5">
+      <div className="grid grid-cols-1 lg:grid-cols-[180px_1fr] gap-4 md:gap-6">
         {/* ── Tabs nav ── */}
         <nav className="flex lg:flex-col gap-1 overflow-x-auto">
           {tabs.map((t) => (
@@ -883,7 +884,7 @@ function ActivityRow({ ev, device }: { ev: DeviceActivity; device: Device }) {
   return (
     <div className="flex items-center gap-2 text-xs rounded-md px-2 py-1.5 hover:bg-muted/40">
       {/* source direction */}
-      <span className={`text-[11px] font-mono shrink-0 w-24 ${isVdsm ? 'text-blue-700 dark:text-blue-400' : 'text-emerald-700 dark:text-emerald-400'}`}>
+      <span className={`text-[11px] font-mono shrink-0 w-16 sm:w-24 ${isVdsm ? 'text-blue-700 dark:text-blue-400' : 'text-emerald-700 dark:text-emerald-400'}`}>
         {isVdsm ? '← dSS' : `→ ${ev.pluginId ?? 'plugin'}`}
       </span>
       {/* type badge */}
@@ -891,9 +892,9 @@ function ActivityRow({ ev, device }: { ev: DeviceActivity; device: Device }) {
         {typeBadge}
       </span>
       {/* description */}
-      <span className="flex-1 text-foreground/80 truncate">{description}</span>
-      {/* timestamp */}
-      <span className="text-[10px] text-muted-foreground shrink-0 tabular-nums">{relativeTime(ev.time)}</span>
+      <span className="flex-1 text-foreground/80 truncate min-w-0">{description}</span>
+      {/* timestamp – hidden on very small screens */}
+      <span className="text-[10px] text-muted-foreground shrink-0 tabular-nums hidden xs:inline sm:inline">{relativeTime(ev.time)}</span>
     </div>
   )
 }

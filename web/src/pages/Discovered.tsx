@@ -471,7 +471,7 @@ export default function DiscoveredPage() {
     <div className="space-y-3">
       {/* Header */}
       <div className="flex items-baseline justify-between">
-        <h1 className="text-lg font-semibold">Discovered</h1>
+        <h1 className="text-lg font-semibold text-foreground">Discovered</h1>
       </div>
 
       {/* KPI row */}

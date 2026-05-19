@@ -26,7 +26,7 @@ export default function SettingsPage() {
   return (
     <div className="space-y-4 max-w-4xl">
       <div className="flex items-center justify-between">
-        <h1 className="text-lg font-semibold">Settings</h1>
+        <h1 className="text-lg font-semibold text-foreground">Settings</h1>
         <Button
           size="sm"
           variant="ghost"

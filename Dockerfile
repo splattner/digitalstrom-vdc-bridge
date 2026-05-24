@@ -22,7 +22,7 @@ RUN go build \
     ./cmd/vdcgo-daemon
 
 # ── Stage 3: Minimal runtime image ───────────────────────────────────────────
-FROM alpine:3.21
+FROM alpine:3.23
 RUN apk add --no-cache ca-certificates tzdata
 COPY --from=go-builder /usr/local/bin/vdcgo-daemon /usr/local/bin/vdcgo-daemon
 

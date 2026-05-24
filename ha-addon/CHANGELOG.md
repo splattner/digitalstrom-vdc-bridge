@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.13](https://github.com/splattner/digitalstrom-vdc-bridge/compare/v0.1.12...v0.1.13) (2026-05-24)
+
+
+### Bug Fixes
+
+* **deps:** update module github.com/go-chi/chi/v5 to v5.3.0 ([#83](https://github.com/splattner/digitalstrom-vdc-bridge/issues/83)) ([cf3b4d0](https://github.com/splattner/digitalstrom-vdc-bridge/commit/cf3b4d060bfb6162d054f00055450e67e275a6bd))
+
 ## [0.1.12](https://github.com/splattner/digitalstrom-vdc-bridge/compare/v0.1.11...v0.1.12) (2026-05-19)
 
 

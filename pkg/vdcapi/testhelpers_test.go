@@ -1,7 +1,17 @@
 package vdcapi
 
-// mockCommander implements Commander for tests.
+import (
+	"sync"
+	"testing"
+	"time"
+)
+
+// mockCommander implements Commander for tests. All fields are guarded by mu
+// since dimChannel ramps call SetLightLevel from a background goroutine —
+// tests must read state via snapshot(), not the fields directly, to stay
+// race-detector clean.
 type mockCommander struct {
+	mu           sync.Mutex
 	called       bool
 	uniqueID     string
 	value        float64
@@ -13,6 +23,8 @@ type mockCommander struct {
 }
 
 func (m *mockCommander) SetLightLevel(uniqueID string, value float64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.called = true
 	m.uniqueID = uniqueID
 	m.value = value
@@ -20,6 +32,8 @@ func (m *mockCommander) SetLightLevel(uniqueID string, value float64) error {
 }
 
 func (m *mockCommander) SetChannelValue(uniqueID string, channelIndex int, value float64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if channelIndex == 0 {
 		m.called = true
 		m.uniqueID = uniqueID
@@ -31,4 +45,45 @@ func (m *mockCommander) SetChannelValue(uniqueID string, channelIndex int, value
 		m.colorValue = value
 	}
 	return m.err
+}
+
+// reset clears call-tracking state between subtests.
+func (m *mockCommander) reset() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.called = false
+	m.uniqueID = ""
+	m.value = 0
+	m.colorCalled = false
+	m.colorUID = ""
+	m.colorChannel = 0
+	m.colorValue = 0
+}
+
+// snapshot returns a race-safe copy of the call-tracking fields.
+func (m *mockCommander) snapshot() (called bool, uniqueID string, value float64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.called, m.uniqueID, m.value
+}
+
+// waitForCommanderCallMatching polls mc via snapshot() until it has been
+// called with the given uniqueID and a value satisfying want, or the timeout
+// elapses. Needed for dimChannel, whose ramp applies asynchronously from a
+// background goroutine rather than synchronously within the notification
+// call, so exact timing/value can't be asserted immediately.
+func waitForCommanderCallMatching(t *testing.T, mc *mockCommander, wantUniqueID string, want func(value float64) bool, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		called, uid, value := mc.snapshot()
+		if called && uid == wantUniqueID && want(value) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for matching commander call uniqueid=%s, last seen called=%t uid=%s value=%v",
+				wantUniqueID, called, uid, value)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
 }

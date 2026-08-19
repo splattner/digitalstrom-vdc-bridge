@@ -40,8 +40,14 @@ type ServerConfig struct {
 	// OnTrace, when non-nil, is called for every inbound and outbound pbuf frame.
 	// It is invoked synchronously; implementations must not block.
 	OnTrace func(PbufTraceFrame)
+	// RampManager runs the smooth ramps started by dimChannel notifications.
+	// Must be a shared instance (e.g. from NewDimRampManager()) across every
+	// ServerConfig copy for a given daemon — a new methodService is created
+	// per call, so ramp state can only persist here. May be nil, in which
+	// case dimChannel notifications are accepted but have no effect.
+	RampManager *dimRampManager
 }
 
 func (c ServerConfig) methodService() methodService {
-	return newMethodService(c.DSUID, c.Description, c.State, c.Commander, c.Scenes, c.Config)
+	return newMethodService(c.DSUID, c.Description, c.State, c.Commander, c.Scenes, c.Config, c.RampManager)
 }

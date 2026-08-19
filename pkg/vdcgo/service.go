@@ -234,6 +234,7 @@ func NewService(cfg Config) (*Service, error) {
 				Commander:   cmdr,
 				Scenes:      scenes,
 				Config:      configStore,
+				RampManager: vdcapi.NewDimRampManager(),
 				OnTrace: func(f vdcapi.PbufTraceFrame) {
 					if svc.httpServer != nil {
 						svc.httpServer.NotifyPbufTrace(f)

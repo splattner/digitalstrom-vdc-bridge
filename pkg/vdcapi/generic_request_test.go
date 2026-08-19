@@ -3,6 +3,7 @@ package vdcapi
 import (
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/splattner/vdcgo/pkg/runtime"
 )
@@ -223,9 +224,20 @@ func TestProcessRequestGenericRequestRemoveTargetParity(t *testing.T) {
 func TestProcessRequestGenericRequestControlMethodFallbackDispatch(t *testing.T) {
 	state := NewStateStore()
 	state.HandleEvent(runtime.Event{Type: runtime.EventInit, Output: "light", Name: "ext", UniqueID: "u-generic-control"})
+	// Start at a mid-range level so a dimChannel ramp toward 0 has somewhere
+	// to go — a device already at 0 needs no ramp and the commander is
+	// legitimately never called.
+	state.HandleEvent(runtime.Event{Type: runtime.EventChannel, UniqueID: "u-generic-control", Index: 0, Value: 50})
 	mc := &mockCommander{}
 
-	s := &Server{ServerConfig: ServerConfig{DSUID: "0123456789ABCDEFFEDCBA9876543210AA", Description: "testdesc", State: state, Commander: mc}}
+	prevTick, prevSweep := dimRampTickInterval, dimRampFullSweepDuration
+	dimRampTickInterval = time.Millisecond
+	dimRampFullSweepDuration = 20 * time.Millisecond
+	defer func() {
+		dimRampTickInterval, dimRampFullSweepDuration = prevTick, prevSweep
+	}()
+
+	s := &Server{ServerConfig: ServerConfig{DSUID: "0123456789ABCDEFFEDCBA9876543210AA", Description: "testdesc", State: state, Commander: mc, RampManager: NewDimRampManager()}}
 	sess := &session{active: true, vdsmDSUID: "0011", apiVersion: 2}
 
 	tests := []struct {
@@ -235,16 +247,13 @@ func TestProcessRequestGenericRequestControlMethodFallbackDispatch(t *testing.T)
 		wantValue  float64
 	}{
 		{name: "callScene", methodName: "callScene", params: map[string]any{"scene": 5}, wantValue: 100},
-		{name: "dimChannel", methodName: "dimChannel", params: map[string]any{"mode": -1}, wantValue: 0},
 		{name: "setControlValue", methodName: "setControlValue", params: map[string]any{"name": "brightness", "value": 33.0}, wantValue: 33.0},
 		{name: "setOutputChannelValue", methodName: "setOutputChannelValue", params: map[string]any{"value": 44.0}, wantValue: 44.0},
 	}
 
 	for i, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			mc.called = false
-			mc.uniqueID = ""
-			mc.value = 0
+			mc.reset()
 			r, _ := s.processRequest(request{
 				ID:     fmt.Sprintf("31-%d", i),
 				Method: "genericRequest",
@@ -253,11 +262,28 @@ func TestProcessRequestGenericRequestControlMethodFallbackDispatch(t *testing.T)
 			if r == nil || r.Error != 0 {
 				t.Fatalf("expected genericRequest %s success, got %+v", tc.methodName, r)
 			}
-			if !mc.called || mc.uniqueID != "u-generic-control" || mc.value != tc.wantValue {
-				t.Fatalf("expected commander call uniqueid=u-generic-control value=%f, got called=%t uid=%s value=%f", tc.wantValue, mc.called, mc.uniqueID, mc.value)
+			called, uid, value := mc.snapshot()
+			if !called || uid != "u-generic-control" || value != tc.wantValue {
+				t.Fatalf("expected commander call uniqueid=u-generic-control value=%f, got called=%t uid=%s value=%f", tc.wantValue, called, uid, value)
 			}
 		})
 	}
+
+	t.Run("dimChannel", func(t *testing.T) {
+		mc.reset()
+		r, _ := s.processRequest(request{
+			ID:     "31-dim",
+			Method: "genericRequest",
+			Params: map[string]any{"methodname": "dimChannel", "dSUID": "root", "params": map[string]any{"mode": -1}},
+		}, sess)
+		if r == nil || r.Error != 0 {
+			t.Fatalf("expected genericRequest dimChannel success, got %+v", r)
+		}
+		// The ramp applies asynchronously; just confirm it started moving the
+		// right device down from its 50 starting point. Exact ramp math is
+		// covered by TestDimRampManager.
+		waitForCommanderCallMatching(t, mc, "u-generic-control", func(v float64) bool { return v < 50 }, time.Second)
+	})
 }
 
 func TestRemoveLifecycle(t *testing.T) {

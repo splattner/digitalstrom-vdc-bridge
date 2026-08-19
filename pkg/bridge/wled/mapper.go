@@ -35,15 +35,6 @@ const lcBitRGB = 0x01
 // lcBitCCT indicates the segment supports color temperature.
 const lcBitCCT = 0x04
 
-// classifyKind maps a WLED light-capability bitmask to a bridge kind string.
-func classifyKind(lc int) string {
-	if lc&lcBitRGB != 0 {
-		return "colorlight"
-	}
-	// white-only or CCT-only → expose as dimmable
-	return "dimmer"
-}
-
 // briToVDC converts a WLED brightness (0–255) to a vDC percentage (0.0–100.0).
 func briToVDC(bri int, on bool) float64 {
 	if !on {

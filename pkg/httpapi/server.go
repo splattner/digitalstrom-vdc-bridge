@@ -235,7 +235,6 @@ func (s *Server) NotifyPbufTrace(f vdcapi.PbufTraceFrame) {
 
 func (s *Server) buildRouter() chi.Router {
 	r := chi.NewRouter()
-	r.Use(middleware.RealIP)
 	r.Use(middleware.Recoverer)
 	r.Use(corsMiddleware)
 

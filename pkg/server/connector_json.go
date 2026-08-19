@@ -31,7 +31,6 @@ func (c *Connector) handleJSONLine(line string) error {
 		return fmt.Errorf("message must be JSON object or array")
 	}
 
-	switchToSimple := false
 	for _, obj := range objects {
 		msg, _ := obj["message"].(string)
 		if msg == "" {
@@ -67,7 +66,6 @@ func (c *Connector) handleJSONLine(line string) error {
 			})
 			if c.registry.Count() == 1 && initMsg.Protocol == "simple" {
 				c.mode = modeSimple
-				switchToSimple = true
 			}
 			if err := c.sendStatus(nil, initMsg.Tag); err != nil {
 				return err
@@ -98,9 +96,6 @@ func (c *Connector) handleJSONLine(line string) error {
 				return err
 			}
 		}
-	}
-	if switchToSimple {
-		c.mode = modeSimple
 	}
 	return nil
 }

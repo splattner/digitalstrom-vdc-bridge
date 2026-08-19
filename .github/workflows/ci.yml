@@ -27,6 +27,9 @@ jobs:
       - name: Install web dependencies
         run: cd web && npm ci
 
+      - name: web lint
+        run: cd web && npm run lint
+
       - name: Build web UI
         run: cd web && npm run build
 
@@ -36,5 +39,10 @@ jobs:
       - name: go vet
         run: go vet ./...
 
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2
+
       - name: go test
-        run: go test ./...
+        run: go test ./... -race

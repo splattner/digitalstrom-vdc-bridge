@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { api, BASE, type Device } from '@/api/client'
 import { Button } from '@/components/ui/button'
@@ -126,9 +126,13 @@ function DetailPanel({ frame, pair, deviceName }: {
   const [tab, setTab] = useState<'decoded' | 'raw'>('decoded')
   const [side, setSide] = useState<'main' | 'pair'>('main')
 
-  // reset to main + decoded when selected frame changes
-  useEffect(() => { setSide('main') }, [frame.id])
-  useEffect(() => { setTab('decoded') }, [frame.id, side])
+  // `key={frame.id}` on the caller remounts this component (resetting tab +
+  // side to their initial values) whenever the selected frame changes, so no
+  // effect is needed for that. Switching sides still resets the tab.
+  const switchSide = (s: 'main' | 'pair') => {
+    setSide(s)
+    setTab('decoded')
+  }
 
   const active = side === 'main' || !pair ? frame : pair
 
@@ -160,7 +164,7 @@ function DetailPanel({ frame, pair, deviceName }: {
       {pair && (
         <div className="flex border-b text-xs">
           <button
-            onClick={() => setSide('main')}
+            onClick={() => switchSide('main')}
             className={`flex-1 py-1 transition-colors ${
               side === 'main'
                 ? 'border-b-2 border-primary text-foreground font-medium'
@@ -171,7 +175,7 @@ function DetailPanel({ frame, pair, deviceName }: {
             {' '}{frame.typeName}
           </button>
           <button
-            onClick={() => setSide('pair')}
+            onClick={() => switchSide('pair')}
             className={`flex-1 py-1 transition-colors ${
               side === 'pair'
                 ? 'border-b-2 border-primary text-foreground font-medium'
@@ -275,9 +279,14 @@ export default function ProtocolPage() {
   const autoScrollRef = useRef(protocolAutoScroll)
   const maxFramesRef = useRef(protocolFrameBufferCap || DEFAULT_MAX_FRAMES)
 
-  pausedRef.current = paused
-  autoScrollRef.current = protocolAutoScroll
-  maxFramesRef.current = protocolFrameBufferCap || DEFAULT_MAX_FRAMES
+  // Keep refs in sync with the latest render's values so the WebSocket
+  // handlers (which close over these refs, not the state) always see
+  // current settings without needing to reconnect on every change.
+  useEffect(() => { pausedRef.current = paused }, [paused])
+  useEffect(() => { autoScrollRef.current = protocolAutoScroll }, [protocolAutoScroll])
+  useEffect(() => {
+    maxFramesRef.current = protocolFrameBufferCap || DEFAULT_MAX_FRAMES
+  }, [protocolFrameBufferCap])
 
   // ── Device name lookup ─────────────────────────────────────────────────
   const { data: devices } = useQuery({ queryKey: ['devices'], queryFn: api.devices })
@@ -326,54 +335,62 @@ export default function ProtocolPage() {
     return [...s].sort()
   }, [frames])
 
-  const connect = useCallback(() => {
-    const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-    const ws = new WebSocket(`${proto}://${location.host}${BASE}/debug/pbuf`)
-    wsRef.current = ws
+  useEffect(() => {
+    // `cancelled` stops the reconnect loop once the effect is torn down —
+    // otherwise closing the socket on unmount fires onclose, which would
+    // schedule another connect() and leak a new WebSocket forever.
+    let cancelled = false
 
-    ws.onopen = () => setConnected(true)
-    ws.onclose = () => {
-      setConnected(false)
-      // reconnect after 2 s
-      setTimeout(connect, 2000)
-    }
-    ws.onerror = () => ws.close()
-    ws.onmessage = (msg) => {
-      if (pausedRef.current) return
-      try {
-        const ev = JSON.parse(msg.data as string) as { type: string; data?: Record<string, unknown> }
-        if (ev.type !== 'pbuf' || !ev.data) return
-        const d = ev.data
-        const frame: PbufFrame = {
-          id: ++seqRef.current,
-          time: (d.time as string) ?? new Date().toISOString(),
-          direction: (d.direction as 'rx' | 'tx') ?? 'rx',
-          typeNum: (d.typeNum as number) ?? 0,
-          typeName: (d.typeName as string) ?? `type_${d.typeNum}`,
-          msgId: d.msgId as number | undefined,
-          hasMsgId: d.hasMsgId as boolean | undefined,
-          deviceDSUID: (d.deviceDSUID as string | undefined) || undefined,
-          decoded: d.decoded as Record<string, unknown> | undefined,
-          rawHex: d.rawHex as string | undefined,
+    // A hoisted function declaration (not a const arrow fn) so the
+    // self-reference in onclose's reconnect timer is safe to call.
+    function connect() {
+      if (cancelled) return
+      const proto = location.protocol === 'https:' ? 'wss' : 'ws'
+      const ws = new WebSocket(`${proto}://${location.host}${BASE}/debug/pbuf`)
+      wsRef.current = ws
+
+      ws.onopen = () => setConnected(true)
+      ws.onclose = () => {
+        setConnected(false)
+        if (!cancelled) setTimeout(connect, 2000)
+      }
+      ws.onerror = () => ws.close()
+      ws.onmessage = (msg) => {
+        if (pausedRef.current) return
+        try {
+          const ev = JSON.parse(msg.data as string) as { type: string; data?: Record<string, unknown> }
+          if (ev.type !== 'pbuf' || !ev.data) return
+          const d = ev.data
+          const frame: PbufFrame = {
+            id: ++seqRef.current,
+            time: (d.time as string) ?? new Date().toISOString(),
+            direction: (d.direction as 'rx' | 'tx') ?? 'rx',
+            typeNum: (d.typeNum as number) ?? 0,
+            typeName: (d.typeName as string) ?? `type_${d.typeNum}`,
+            msgId: d.msgId as number | undefined,
+            hasMsgId: d.hasMsgId as boolean | undefined,
+            deviceDSUID: (d.deviceDSUID as string | undefined) || undefined,
+            decoded: d.decoded as Record<string, unknown> | undefined,
+            rawHex: d.rawHex as string | undefined,
+          }
+          setFrames((prev) => {
+            const next = [...prev, frame]
+            const cap = maxFramesRef.current
+            return next.length > cap ? next.slice(next.length - cap) : next
+          })
+        } catch {
+          // ignore malformed frames
         }
-        setFrames((prev) => {
-          const next = [...prev, frame]
-          const cap = maxFramesRef.current
-          return next.length > cap ? next.slice(next.length - cap) : next
-        })
-      } catch {
-        // ignore malformed frames
       }
     }
-  }, [])
 
-  useEffect(() => {
     connect()
     return () => {
+      cancelled = true
       wsRef.current?.close()
       wsRef.current = null
     }
-  }, [connect])
+  }, [])
 
   // auto-scroll to bottom when not paused
   useEffect(() => {
@@ -498,6 +515,7 @@ export default function ProtocolPage() {
         {selected && (
           <aside className="w-80 shrink-0 border rounded-lg overflow-hidden flex flex-col">
             <DetailPanel
+              key={selected.id}
               frame={selected}
               pair={(() => {
                 const pairedId = pairMap.get(selected.id)

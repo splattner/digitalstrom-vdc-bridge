@@ -406,14 +406,6 @@ func (m methodService) ensurePairTimeout(timeout int) error {
 	return nil
 }
 
-func (m methodService) pongTarget(target string) string {
-	pongDSUID := strings.TrimSpace(target)
-	if pongDSUID == "" || strings.EqualFold(pongDSUID, "root") {
-		return m.dsuid
-	}
-	return pongDSUID
-}
-
 func (m methodService) resolvePongTarget(target string) (string, bool) {
 	pongDSUID := strings.TrimSpace(target)
 	if pongDSUID == "" || strings.EqualFold(pongDSUID, "root") || strings.EqualFold(pongDSUID, m.dsuid) {

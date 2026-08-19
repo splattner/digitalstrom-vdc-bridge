@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowDownUp, ArrowDown, ArrowUp, Search, X,
@@ -310,22 +310,22 @@ export default function DiscoveredPage() {
     [filtered],
   )
 
-  // Drop selections that are no longer visible (e.g. filter changed, row gone).
-  useEffect(() => {
-    if (selected.size === 0) return
-    const visible = new Set(filtered.map(ROW_KEY))
-    let changed = false
-    const next = new Set<string>()
-    for (const k of selected) {
-      if (visible.has(k)) next.add(k); else changed = true
-    }
-    if (changed) setSelected(next)
-  }, [filtered, selected])
+  // Selections for rows no longer visible under the current filter are left
+  // in `selected` rather than pruned — every display/count below reads
+  // selectedRows (selected ∩ filtered) instead of `selected` directly, so a
+  // stale entry never affects the UI, and it naturally rejoins the count if
+  // the filter changes back.
 
-  // Reset to page 1 when the visible set changes meaningfully.
-  useEffect(() => {
+  // Reset to page 1 when the visible set changes meaningfully. Done as a
+  // render-time state adjustment (see https://react.dev/learn/you-might-not-need-an-effect#adjusting-some-state-when-a-prop-changes)
+  // rather than an effect, since it's just resetting local state in response
+  // to other state changing.
+  const pageResetKey = JSON.stringify([query, pluginFilter, kindFilter, areaFilter, statusFilter, groupBy, pageSize, sort.key, sort.dir])
+  const [prevPageResetKey, setPrevPageResetKey] = useState(pageResetKey)
+  if (pageResetKey !== prevPageResetKey) {
+    setPrevPageResetKey(pageResetKey)
     setPage(0)
-  }, [query, pluginFilter, kindFilter, areaFilter, statusFilter, groupBy, pageSize, sort.key, sort.dir])
+  }
 
   // ── Mutations ────────────────────────────────────────────────────────────
   const createMut = useMutation({
@@ -635,10 +635,13 @@ export default function DiscoveredPage() {
         )}
       </div>
 
-      {/* Bulk action bar (sticky above the table when something is selected) */}
-      {selected.size > 0 && (
+      {/* Bulk action bar (sticky above the table when something is selected).
+          Counts use selectedRows (selected ∩ filtered) rather than raw
+          selected.size, so stale selections for rows hidden by the current
+          filter don't inflate the count. */}
+      {selectedRows.length > 0 && (
         <div className="sticky top-0 z-10 flex flex-wrap items-center gap-2 rounded-lg border bg-primary/10 border-primary/30 px-3 py-2 text-sm">
-          <span className="font-medium">{selected.size} selected</span>
+          <span className="font-medium">{selectedRows.length} selected</span>
           <span className="text-xs text-muted-foreground">
             ({selBridgeable} new · {selUnbridgeable} bridged)
           </span>

@@ -18,7 +18,8 @@ import {
   type WsEvent,
 } from '@/api/client'
 import { Button } from '@/components/ui/button'
-import { ConfigForm, defaultsForSchema, stripEmptyPasswords } from '@/components/ConfigForm'
+import { ConfigForm } from '@/components/ConfigForm'
+import { defaultsForSchema, stripEmptyPasswords } from '@/lib/configSchema'
 import { useToasts } from '@/lib/toasts'
 
 // ── Plugin-type visual mapping ────────────────────────────────────────────────
@@ -126,9 +127,16 @@ export default function PluginsPage() {
     staleTime: Infinity,
     gcTime: 0,
   })
-  useEffect(() => {
-    if (initialEvents) setEvents(initialEvents)
-  }, [initialEvents])
+  // Seed `events` from the initial snapshot once it loads. Done as a
+  // render-time state adjustment rather than an effect (see
+  // https://react.dev/learn/you-might-not-need-an-effect#adjusting-some-state-when-a-prop-changes):
+  // initialEvents keeps a stable reference once loaded (staleTime: Infinity),
+  // so this only fires once.
+  const [seededFrom, setSeededFrom] = useState<PluginEvent[] | undefined>(undefined)
+  if (initialEvents && initialEvents !== seededFrom) {
+    setSeededFrom(initialEvents)
+    setEvents(initialEvents)
+  }
   useEffect(() => {
     return connectEvents((e: WsEvent) => {
       if (e.type === 'pluginEvent') {
@@ -151,9 +159,20 @@ export default function PluginsPage() {
     return m
   }, [events])
 
-  // KPI: warnings/errors in the last hour.
+  // KPI: warnings/errors in the last hour. `now` is refreshed from an effect
+  // (reading the clock is a side effect, not something to do during render)
+  // and re-read every 30s so entries age out of the 1h window even if no new
+  // events arrive. Starts at 0 for one render until the effect's first tick
+  // lands — harmless for a KPI widget.
+  const [now, setNow] = useState(0)
+  useEffect(() => {
+    const tick = () => setNow(Date.now())
+    tick()
+    const id = setInterval(tick, 30_000)
+    return () => clearInterval(id)
+  }, [])
   const recentCounts = useMemo(() => {
-    const cutoff = Date.now() - 60 * 60 * 1000
+    const cutoff = now - 60 * 60 * 1000
     let warn = 0, err = 0
     for (const ev of events) {
       const t = new Date(ev.time).getTime()
@@ -162,7 +181,7 @@ export default function PluginsPage() {
       else if (ev.level === 'error') err++
     }
     return { warn, err }
-  }, [events])
+  }, [events, now])
 
   const totalPlugins = plugins?.length ?? 0
   const connectedPlugins = (plugins ?? []).filter((p) => p.status === 'connected').length
@@ -550,10 +569,14 @@ function AddPluginModal({
   const schema: ConfigSchema = selected?.schema ?? { fields: [] }
 
   const [config, setConfig] = useState<Record<string, unknown>>(() => defaultsForSchema(schema))
-  useEffect(() => {
+  // Reset to the new type's defaults when the selected type changes — a
+  // render-time state adjustment rather than an effect (see
+  // https://react.dev/learn/you-might-not-need-an-effect#adjusting-some-state-when-a-prop-changes).
+  const [configForType, setConfigForType] = useState(typeName)
+  if (typeName !== configForType) {
+    setConfigForType(typeName)
     setConfig(defaultsForSchema(schema))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [typeName])
+  }
 
   const createMut = useMutation({
     mutationFn: () =>
@@ -676,10 +699,14 @@ function EditPluginModal({
     queryFn: () => api.pluginConfig(pluginId),
   })
   const [config, setConfig] = useState<Record<string, unknown> | null>(null)
-
-  useEffect(() => {
-    if (data) setConfig(data.config)
-  }, [data])
+  // Seed `config` from the loaded plugin config once, as a render-time state
+  // adjustment rather than an effect — `data` keeps a stable reference once
+  // loaded, so this only fires once per query result.
+  const [configSeededFrom, setConfigSeededFrom] = useState<typeof data>(undefined)
+  if (data && data !== configSeededFrom) {
+    setConfigSeededFrom(data)
+    setConfig(data.config)
+  }
 
   const typeInfo = data ? types.get(data.type) : undefined
   const schema: ConfigSchema = typeInfo?.schema ?? { fields: [] }
@@ -819,12 +846,18 @@ function AllLogsPanel({ plugins, events }: { plugins: Plugin[]; events: PluginEv
   const bottomRef = useRef<HTMLDivElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
 
-  // When paused toggles on, capture; when toggled off, clear so live resumes.
-  useEffect(() => {
-    if (paused) setPausedSnapshot(events)
-    else setPausedSnapshot(null)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [paused])
+  // Pausing/resuming is only ever triggered by the user (the toolbar toggle
+  // and the "resume" button below), so the snapshot capture/clear lives in
+  // those click handlers directly rather than in an effect keyed on `paused`.
+  function togglePause() {
+    const next = !paused
+    setPaused(next)
+    setPausedSnapshot(next ? events : null)
+  }
+  function resumeLive() {
+    setPaused(false)
+    setPausedSnapshot(null)
+  }
 
   const liveEvents = paused && pausedSnapshot ? pausedSnapshot : events
 
@@ -916,7 +949,7 @@ function AllLogsPanel({ plugins, events }: { plugins: Plugin[]; events: PluginEv
         <span className="text-[11px] text-muted-foreground tabular-nums">{displayed.length} events</span>
         <button
           type="button"
-          onClick={() => setPaused((p) => !p)}
+          onClick={togglePause}
           className={`inline-flex items-center gap-1 text-[11px] rounded-full border px-2 py-0.5 ${
             paused
               ? 'border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300'
@@ -941,7 +974,7 @@ function AllLogsPanel({ plugins, events }: { plugins: Plugin[]; events: PluginEv
         {paused && (
           <button
             type="button"
-            onClick={() => setPaused(false)}
+            onClick={resumeLive}
             className="text-[11px] underline text-muted-foreground hover:text-foreground inline-flex items-center gap-0.5"
           >
             <Pause className="h-3 w-3" /> resume

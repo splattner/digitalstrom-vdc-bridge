@@ -87,6 +87,9 @@ func (s *PbufServer) Run(ctx context.Context) error {
 		return fmt.Errorf("listen on protobuf vdc api port %d: %w", s.Port, err)
 	}
 	defer ln.Close()
+	if s.RampManager != nil {
+		defer s.RampManager.stopAll()
+	}
 
 	var wg sync.WaitGroup
 	acceptErr := make(chan error, 1)

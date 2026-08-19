@@ -24,10 +24,11 @@ type methodService struct {
 	commander   Commander
 	scenes      *SceneStore
 	config      *ConfigStore
+	rampManager *dimRampManager
 }
 
-func newMethodService(dsuid, description string, state *StateStore, commander Commander, scenes *SceneStore, config *ConfigStore) methodService {
-	return methodService{dsuid: dsuid, description: description, state: state, commander: commander, scenes: scenes, config: config}
+func newMethodService(dsuid, description string, state *StateStore, commander Commander, scenes *SceneStore, config *ConfigStore, rampManager *dimRampManager) methodService {
+	return methodService{dsuid: dsuid, description: description, state: state, commander: commander, scenes: scenes, config: config, rampManager: rampManager}
 }
 
 func (m methodService) resolveGetPropertyTarget(target string) (map[string]any, error) {
@@ -694,14 +695,27 @@ func (m methodService) handleSetControlValueNotification(targets []string, all b
 	m.applyLevelToNotificationTargets(targets, all, value)
 }
 
+// handleDimChannelNotification implements the dS hold-to-dim gesture: mode
+// -1/+1 starts a smooth ramp toward 0/100 that continues until a mode 0
+// notification arrives (button released) or the bound is reached — it does
+// NOT snap straight to the bound. See dimRampManager for the ramp itself.
 func (m methodService) handleDimChannelNotification(targets []string, all bool, mode int) {
-	switch {
-	case mode == 0:
+	if m.rampManager == nil || m.commander == nil {
 		return
-	case mode > 0:
-		m.applyLevelToNotificationTargets(targets, all, 100)
-	case mode < 0:
-		m.applyLevelToNotificationTargets(targets, all, 0)
+	}
+	for _, d := range m.resolveNotificationTargets(targets, all) {
+		uniqueID := d.UniqueID
+		if mode == 0 {
+			m.rampManager.stop(uniqueID)
+			continue
+		}
+		start := clampLevel(d.Channels[0])
+		commander := m.commander
+		m.rampManager.start(uniqueID, mode, start, func(value float64) {
+			if err := commander.SetLightLevel(uniqueID, value); err != nil {
+				logging.Warn("dim_ramp_apply_error", logging.Fields{"unique_id": uniqueID, "error": err})
+			}
+		})
 	}
 }
 

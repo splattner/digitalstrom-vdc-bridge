@@ -3,6 +3,7 @@ package vdcapi
 import (
 	"math"
 	"testing"
+	"time"
 
 	"github.com/splattner/vdcgo/pkg/runtime"
 
@@ -1402,9 +1403,20 @@ func TestProcessPbufGenericRequestRemoveTargetParity(t *testing.T) {
 func TestProcessPbufGenericRequestControlMethodFallbackDispatch(t *testing.T) {
 	state := NewStateStore()
 	state.HandleEvent(runtime.Event{Type: runtime.EventInit, Output: "light", Name: "ext", UniqueID: "u-generic-control"})
+	// Start at a mid-range level so a dimChannel ramp toward 0 has somewhere
+	// to go — a device already at 0 needs no ramp and the commander is
+	// legitimately never called.
+	state.HandleEvent(runtime.Event{Type: runtime.EventChannel, UniqueID: "u-generic-control", Index: 0, Value: 50})
 	mc := &mockCommander{}
 
-	s := &PbufServer{ServerConfig: ServerConfig{DSUID: "0123456789ABCDEFFEDCBA9876543210AA", Description: "test", State: state, Commander: mc}}
+	prevTick, prevSweep := dimRampTickInterval, dimRampFullSweepDuration
+	dimRampTickInterval = time.Millisecond
+	dimRampFullSweepDuration = 20 * time.Millisecond
+	defer func() {
+		dimRampTickInterval, dimRampFullSweepDuration = prevTick, prevSweep
+	}()
+
+	s := &PbufServer{ServerConfig: ServerConfig{DSUID: "0123456789ABCDEFFEDCBA9876543210AA", Description: "test", State: state, Commander: mc, RampManager: NewDimRampManager()}}
 	sess := &session{active: true, vdsmDSUID: "001122", apiVersion: APIVersionMax}
 
 	tests := []struct {
@@ -1414,16 +1426,13 @@ func TestProcessPbufGenericRequestControlMethodFallbackDispatch(t *testing.T) {
 		wantValue float64
 	}{
 		{name: "callScene", method: "callScene", params: []pbufPropertyElement{{Name: "scene", Value: 5}}, wantValue: 100},
-		{name: "dimChannel", method: "dimChannel", params: []pbufPropertyElement{{Name: "mode", Value: -1}}, wantValue: 0},
 		{name: "setControlValue", method: "setControlValue", params: []pbufPropertyElement{{Name: "name", Value: "brightness"}, {Name: "value", Value: 33.0}}, wantValue: 33.0},
 		{name: "setOutputChannelValue", method: "setOutputChannelValue", params: []pbufPropertyElement{{Name: "value", Value: 44.0}}, wantValue: 44.0},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			mc.called = false
-			mc.uniqueID = ""
-			mc.value = 0
+			mc.reset()
 			frames, _ := s.processPbufMessage(buildPbufGenericMatrixRequest("root", tc.method, tc.params), sess)
 			if len(frames) != 1 {
 				t.Fatalf("expected one response frame, got %d", len(frames))
@@ -1435,11 +1444,31 @@ func TestProcessPbufGenericRequestControlMethodFallbackDispatch(t *testing.T) {
 			if msgType != pbufTypeGenericResponse || parsePbufGenericCode(sub[3]) != pbufResultOK {
 				t.Fatalf("expected generic ok response, got type=%d code=%d", msgType, parsePbufGenericCode(sub[3]))
 			}
-			if !mc.called || mc.uniqueID != "u-generic-control" || mc.value != tc.wantValue {
-				t.Fatalf("expected commander call uniqueid=u-generic-control value=%f, got called=%t uid=%s value=%f", tc.wantValue, mc.called, mc.uniqueID, mc.value)
+			called, uid, value := mc.snapshot()
+			if !called || uid != "u-generic-control" || value != tc.wantValue {
+				t.Fatalf("expected commander call uniqueid=u-generic-control value=%f, got called=%t uid=%s value=%f", tc.wantValue, called, uid, value)
 			}
 		})
 	}
+
+	t.Run("dimChannel", func(t *testing.T) {
+		mc.reset()
+		frames, _ := s.processPbufMessage(buildPbufGenericMatrixRequest("root", "dimChannel", []pbufPropertyElement{{Name: "mode", Value: -1}}), sess)
+		if len(frames) != 1 {
+			t.Fatalf("expected one response frame, got %d", len(frames))
+		}
+		msgType, _, _, sub, err := parsePbufEnvelope(frames[0][2:])
+		if err != nil {
+			t.Fatalf("parse response envelope: %v", err)
+		}
+		if msgType != pbufTypeGenericResponse || parsePbufGenericCode(sub[3]) != pbufResultOK {
+			t.Fatalf("expected generic ok response, got type=%d code=%d", msgType, parsePbufGenericCode(sub[3]))
+		}
+		// The ramp applies asynchronously; just confirm it started moving the
+		// right device down from its 50 starting point. Exact ramp math is
+		// covered by TestDimRampManager.
+		waitForCommanderCallMatching(t, mc, "u-generic-control", func(v float64) bool { return v < 50 }, time.Second)
+	})
 }
 
 func TestProcessPbufRemoveReturnsOK(t *testing.T) {
@@ -1712,11 +1741,22 @@ func TestProcessPbufNotificationCallSceneStopNoCommand(t *testing.T) {
 func TestProcessPbufNotificationDimChannelSignedMode(t *testing.T) {
 	state := NewStateStore()
 	state.HandleEvent(runtime.Event{Type: runtime.EventInit, Output: "light", Name: "ext", UniqueID: "u1"})
+	// Start at a mid-range level so a dimChannel ramp toward 0 has somewhere
+	// to go — a device already at 0 needs no ramp and the commander is
+	// legitimately never called.
+	state.HandleEvent(runtime.Event{Type: runtime.EventChannel, UniqueID: "u1", Index: 0, Value: 50})
 	snap := state.Snapshot()
 	target := deviceDSUID("0123456789ABCDEFFEDCBA9876543210AA", snap.Devices["uid:u1"], "uid:u1")
 	mc := &mockCommander{}
 
-	s := &PbufServer{ServerConfig: ServerConfig{DSUID: "0123456789ABCDEFFEDCBA9876543210AA", Description: "test", State: state, Commander: mc}}
+	prevTick, prevSweep := dimRampTickInterval, dimRampFullSweepDuration
+	dimRampTickInterval = time.Millisecond
+	dimRampFullSweepDuration = 20 * time.Millisecond
+	defer func() {
+		dimRampTickInterval, dimRampFullSweepDuration = prevTick, prevSweep
+	}()
+
+	s := &PbufServer{ServerConfig: ServerConfig{DSUID: "0123456789ABCDEFFEDCBA9876543210AA", Description: "test", State: state, Commander: mc, RampManager: NewDimRampManager()}}
 	sess := &session{active: true, vdsmDSUID: "001122", apiVersion: APIVersionMax}
 
 	body := make([]byte, 0, 96)
@@ -1738,9 +1778,7 @@ func TestProcessPbufNotificationDimChannelSignedMode(t *testing.T) {
 	if len(frames) != 0 {
 		t.Fatalf("notifications must not respond, got %d frame(s)", len(frames))
 	}
-	if !mc.called || mc.uniqueID != "u1" || mc.value != 0.0 {
-		t.Fatalf("expected commander call uniqueid=u1 value=0, got called=%t uid=%s value=%f", mc.called, mc.uniqueID, mc.value)
-	}
+	waitForCommanderCallMatching(t, mc, "u1", func(v float64) bool { return v < 50 }, time.Second)
 }
 
 func TestChangedStatePayloadIncludesTypedStates(t *testing.T) {

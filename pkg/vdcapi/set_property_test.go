@@ -116,7 +116,7 @@ func TestSetPropertySceneChannelValueJSON(t *testing.T) {
 	target := deviceDSUID("0123456789ABCDEFFEDCBA9876543210AA", snap.Devices["uid:u-scw"], "uid:u-scw")
 
 	scenes := NewSceneStore()
-	ms := newMethodService("0123456789ABCDEFFEDCBA9876543210AA", "testdesc", state, &mockCommander{}, scenes, nil)
+	ms := newMethodService("0123456789ABCDEFFEDCBA9876543210AA", "testdesc", state, &mockCommander{}, scenes, nil, nil)
 	err := ms.setPropertyFromJSON(map[string]any{
 		"dSUID": target,
 		"name":  "scenes/5/channels/0/value",
@@ -142,7 +142,7 @@ func TestSetPropertySceneDontCareJSON(t *testing.T) {
 	target := deviceDSUID("0123456789ABCDEFFEDCBA9876543210AA", snap.Devices["uid:u-sdc"], "uid:u-sdc")
 
 	scenes := NewSceneStore()
-	ms := newMethodService("0123456789ABCDEFFEDCBA9876543210AA", "testdesc", state, &mockCommander{}, scenes, nil)
+	ms := newMethodService("0123456789ABCDEFFEDCBA9876543210AA", "testdesc", state, &mockCommander{}, scenes, nil, nil)
 	err := ms.setPropertyFromJSON(map[string]any{
 		"dSUID": target,
 		"name":  "scenes/3/dontCare",
@@ -164,7 +164,7 @@ func TestSetPropertySceneIgnoreLocalPriorityJSON(t *testing.T) {
 	target := deviceDSUID("0123456789ABCDEFFEDCBA9876543210AA", snap.Devices["uid:u-silp"], "uid:u-silp")
 
 	scenes := NewSceneStore()
-	ms := newMethodService("0123456789ABCDEFFEDCBA9876543210AA", "testdesc", state, &mockCommander{}, scenes, nil)
+	ms := newMethodService("0123456789ABCDEFFEDCBA9876543210AA", "testdesc", state, &mockCommander{}, scenes, nil, nil)
 	err := ms.setPropertyFromJSON(map[string]any{
 		"dSUID": target,
 		"name":  "scenes/2/ignoreLocalPriority",
@@ -186,7 +186,7 @@ func TestSetPropertySceneWriteReflectedInGetProperty(t *testing.T) {
 	target := deviceDSUID("0123456789ABCDEFFEDCBA9876543210AA", snap.Devices["uid:u-scr"], "uid:u-scr")
 
 	scenes := NewSceneStore()
-	ms := newMethodService("0123456789ABCDEFFEDCBA9876543210AA", "testdesc", state, &mockCommander{}, scenes, nil)
+	ms := newMethodService("0123456789ABCDEFFEDCBA9876543210AA", "testdesc", state, &mockCommander{}, scenes, nil, nil)
 
 	_ = ms.setPropertyFromJSON(map[string]any{"dSUID": target, "name": "scenes/5/channels/0/value", "value": 75.0})
 
@@ -208,7 +208,7 @@ func TestSetPropertyNameReflectedInGetProperty(t *testing.T) {
 	target := deviceDSUID(dsuid, snap.Devices["uid:u-name"], "uid:u-name")
 
 	cs := NewConfigStore()
-	ms := newMethodService(dsuid, "testdesc", state, &mockCommander{}, NewSceneStore(), cs)
+	ms := newMethodService(dsuid, "testdesc", state, &mockCommander{}, NewSceneStore(), cs, nil)
 
 	if err := ms.setPropertyFromJSON(map[string]any{
 		"dSUID": target,

@@ -30,4 +30,4 @@ VOLUME ["/data"]
 EXPOSE 8090 8999
 
 ENTRYPOINT ["vdcgo-daemon"]
-CMD ["--non-local", "--http-listen", ":8090", "--datadir", "/data", "--listen", "8999"]
+CMD ["--non-local", "--http-listen", ":8090", "--datadir", "/data"]

@@ -23,6 +23,25 @@ func waitFor(t *testing.T, timeout time.Duration, fn func() bool) {
 	t.Fatal("condition not met before timeout")
 }
 
+// runConnector starts c.Run(ctx) in a background goroutine and returns a stop
+// func that cancels ctx and blocks until Run has actually returned. Tests
+// that override the package-level button timing vars (buttonHoldThreshold,
+// buttonDimRepeatInterval, buttonDebounceWindow) for the duration of the test
+// MUST call stop() — and wait for it to return — before restoring those vars.
+// Run's goroutine reads them on every button event, so restoring them while
+// Run is still in flight is a data race (caught by `go test -race`).
+func runConnector(ctx context.Context, cancel context.CancelFunc, c *Connector) (stop func()) {
+	done := make(chan struct{})
+	go func() {
+		c.Run(ctx)
+		close(done)
+	}()
+	return func() {
+		cancel()
+		<-done
+	}
+}
+
 func TestConnectorInitJSONStatus(t *testing.T) {
 	client, server := net.Pipe()
 	defer client.Close()
@@ -486,23 +505,23 @@ func TestConnectorEmitsHoldWithDimRepeat(t *testing.T) {
 	buttonHoldThreshold = 80 * time.Millisecond
 	buttonDimRepeatInterval = 40 * time.Millisecond
 	buttonDebounceWindow = 5 * time.Millisecond
-	defer func() {
-		buttonHoldThreshold = prevHold
-		buttonDimRepeatInterval = prevRepeat
-		buttonDebounceWindow = prevDebounce
-	}()
 
 	client, server := net.Pipe()
 	defer client.Close()
 
 	events := make(chan runtime.Event, 32)
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
 	c := NewConnector(server, func(e runtime.Event) {
 		events <- e
 	})
-	go c.Run(ctx)
+	stop := runConnector(ctx, cancel, c)
+	defer func() {
+		stop()
+		buttonHoldThreshold = prevHold
+		buttonDimRepeatInterval = prevRepeat
+		buttonDebounceWindow = prevDebounce
+	}()
 
 	r := bufio.NewReader(client)
 	_, err := client.Write([]byte(`{"message":"init","uniqueid":"u12"}` + "\n"))
@@ -553,22 +572,22 @@ func TestConnectorDebounceSuppressesShortTapAction(t *testing.T) {
 	prevDebounce := buttonDebounceWindow
 	buttonHoldThreshold = 200 * time.Millisecond
 	buttonDebounceWindow = 80 * time.Millisecond
-	defer func() {
-		buttonHoldThreshold = prevHold
-		buttonDebounceWindow = prevDebounce
-	}()
 
 	client, server := net.Pipe()
 	defer client.Close()
 
 	events := make(chan runtime.Event, 16)
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
 	c := NewConnector(server, func(e runtime.Event) {
 		events <- e
 	})
-	go c.Run(ctx)
+	stop := runConnector(ctx, cancel, c)
+	defer func() {
+		stop()
+		buttonHoldThreshold = prevHold
+		buttonDebounceWindow = prevDebounce
+	}()
 
 	r := bufio.NewReader(client)
 	_, err := client.Write([]byte(`{"message":"init","uniqueid":"u13"}` + "\n"))
@@ -665,22 +684,22 @@ func TestConnectorButtonModeDimmerSuppressesHoldAction(t *testing.T) {
 	prevRepeat := buttonDimRepeatInterval
 	buttonHoldThreshold = 80 * time.Millisecond
 	buttonDimRepeatInterval = 40 * time.Millisecond
-	defer func() {
-		buttonHoldThreshold = prevHold
-		buttonDimRepeatInterval = prevRepeat
-	}()
 
 	client, server := net.Pipe()
 	defer client.Close()
 
 	events := make(chan runtime.Event, 32)
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
 	c := NewConnector(server, func(e runtime.Event) {
 		events <- e
 	})
-	go c.Run(ctx)
+	stop := runConnector(ctx, cancel, c)
+	defer func() {
+		stop()
+		buttonHoldThreshold = prevHold
+		buttonDimRepeatInterval = prevRepeat
+	}()
 
 	r := bufio.NewReader(client)
 	_, err := client.Write([]byte(`{"message":"init","uniqueid":"u15"}` + "\n"))
@@ -795,22 +814,22 @@ func TestConnectorButtonModeSceneMapsHoldToScene(t *testing.T) {
 	prevRepeat := buttonDimRepeatInterval
 	buttonHoldThreshold = 80 * time.Millisecond
 	buttonDimRepeatInterval = 40 * time.Millisecond
-	defer func() {
-		buttonHoldThreshold = prevHold
-		buttonDimRepeatInterval = prevRepeat
-	}()
 
 	client, server := net.Pipe()
 	defer client.Close()
 
 	events := make(chan runtime.Event, 32)
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
 	c := NewConnector(server, func(e runtime.Event) {
 		events <- e
 	})
-	go c.Run(ctx)
+	stop := runConnector(ctx, cancel, c)
+	defer func() {
+		stop()
+		buttonHoldThreshold = prevHold
+		buttonDimRepeatInterval = prevRepeat
+	}()
 
 	r := bufio.NewReader(client)
 	_, err := client.Write([]byte(`{"message":"init","uniqueid":"u17"}` + "\n"))

@@ -234,10 +234,11 @@ func (p *Plugin) startDeviceClient(ctx context.Context, m bridge.Mapping, dev di
 				"error": err.Error(),
 			})
 		}
-		if s == "connected" {
+		switch s {
+		case "connected":
 			p.host.Log(bridge.LevelInfo, bridge.CodeConnectOK, "WLED device connected",
 				map[string]any{"dsuid": m.DSUID, "mac": dev.MAC, "addr": dev.Addr})
-		} else if s == "disconnected" {
+		case "disconnected":
 			p.host.Log(bridge.LevelWarn, bridge.CodeConnectFailed, "WLED device disconnected",
 				map[string]any{"dsuid": m.DSUID, "mac": dev.MAC, "addr": dev.Addr})
 		}

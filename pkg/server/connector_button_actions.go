@@ -44,7 +44,8 @@ func (c *Connector) emitButtonAction(tag, uniqueID string, index int, value floa
 		c.buttonStates[key] = state
 		return
 	}
-	action := "tip"
+	// Both branches below assign action before it is read.
+	var action string
 	if pressDuration >= buttonHoldThreshold {
 		state.clickCount = 0
 		action = "hold"

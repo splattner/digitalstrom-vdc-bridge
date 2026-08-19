@@ -57,9 +57,8 @@ type Plugin struct {
 
 // discoveredDevice holds the most recent discovery payload plus runtime info.
 type discoveredDevice struct {
-	mac    string
-	cfg    discoveryConfig
-	online bool
+	mac string
+	cfg discoveryConfig
 }
 
 // deviceSub is the per-mapping runtime state for a subscribed relay.

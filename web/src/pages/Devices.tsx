@@ -208,7 +208,7 @@ function actionLabel(action: string): string {
 function ButtonRowBadge({ device, flashAt }: { device: Device; flashAt?: number }) {
   const states = getButtonStates(device)
   const keys   = Object.keys(states).sort()
-  const isFlashing = flashAt != null && (Date.now() - flashAt) < 2000
+  const isFlashing = flashAt != null
 
   // Most recent action across all buttons
   const lastAction = keys.reduce<string | undefined>((best, k) => {
@@ -253,7 +253,10 @@ export default function DevicesPage() {
     queryKey: ['bridges'],
     queryFn: api.bridges,
   })
-  const bridgeByDSUID = new Map<string, Mapping>((bridges ?? []).map((m) => [m.dsuid, m]))
+  const bridgeByDSUID = useMemo(
+    () => new Map<string, Mapping>((bridges ?? []).map((m) => [m.dsuid, m])),
+    [bridges],
+  )
 
   const unbridgeMut = useMutation({
     mutationFn: api.deleteBridge,
@@ -279,7 +282,20 @@ export default function DevicesPage() {
         void qc.invalidateQueries({ queryKey: ['devices'] })
         const evType = (e.data as Record<string, unknown> | undefined)?.eventType
         if (evType === 'button_action' && e.dsuid) {
-          setButtonFlash((prev) => ({ ...prev, [e.dsuid!]: Date.now() }))
+          const dsuid = e.dsuid
+          const ts = Date.now()
+          setButtonFlash((prev) => ({ ...prev, [dsuid]: ts }))
+          // Actively clear the flash after 2s rather than comparing
+          // Date.now() at render time — that way a row that stops receiving
+          // events reliably stops flashing instead of getting stuck lit.
+          setTimeout(() => {
+            setButtonFlash((prev) => {
+              if (prev[dsuid] !== ts) return prev
+              const next = { ...prev }
+              delete next[dsuid]
+              return next
+            })
+          }, 2000)
         }
       }
     })
@@ -857,9 +873,9 @@ function ActivityTab({ dsuid, device }: { dsuid: string; device: Device }) {
 function ActivityRow({ ev, device }: { ev: DeviceActivity; device: Device }) {
   const isVdsm = ev.source === 'vdsm'
 
-  // Event description
-  let description = ''
-  let typeBadge = ''
+  // Event description — every branch below assigns both, so no initializer is needed.
+  let description: string
+  let typeBadge: string
   if (ev.type === 'channel') {
     const name = channelName(device, ev.index ?? 0)
     const val  = ev.value != null ? fmtValue(ev.value) : '?'
@@ -972,7 +988,7 @@ function ButtonsList({ device, flashAt }: { device: Device; flashAt?: number }) 
   const descs    = getButtonDescs(device)
   const settings = getButtonSettings(device)
   const keys     = Object.keys(states).sort()
-  const isFlashing = flashAt != null && (Date.now() - flashAt) < 2000
+  const isFlashing = flashAt != null
 
   const groupMut = useMutation({
     mutationFn: ({ idx, group }: { idx: number; group: number }) =>

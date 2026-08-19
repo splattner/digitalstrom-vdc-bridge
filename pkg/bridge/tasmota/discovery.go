@@ -91,17 +91,6 @@ func (d *discoveryConfig) teleTopic(suffix string) string {
 	return d.fullTopic(d.prefixAt(2, "tele")) + suffix
 }
 
-// statWildcard returns the wildcard subscription matching every stat topic for
-// this device, e.g. "stat/tasmota_AABBCC/+".
-func (d *discoveryConfig) statWildcard() string {
-	return d.fullTopic(d.prefixAt(1, "stat")) + "+"
-}
-
-// teleWildcard returns the wildcard subscription matching every tele topic.
-func (d *discoveryConfig) teleWildcard() string {
-	return d.fullTopic(d.prefixAt(2, "tele")) + "+"
-}
-
 // relayCount returns how many relay/light slots this device exposes.
 func (d *discoveryConfig) relayCount() int {
 	n := 0
@@ -179,7 +168,7 @@ func parseEntityID(id string) (mac string, relay int) {
 	relay = 1
 	if i := strings.Index(id, ":R"); i > 0 {
 		mac = id[:i]
-		fmt.Sscanf(id[i+2:], "%d", &relay)
+		_, _ = fmt.Sscanf(id[i+2:], "%d", &relay)
 		if relay <= 0 {
 			relay = 1
 		}

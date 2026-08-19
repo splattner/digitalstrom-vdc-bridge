@@ -293,7 +293,7 @@ func normaliseDSUID(s string) string {
 	case 34:
 		// Must be all hex digits.
 		for _, c := range s {
-			if !((c >= '0' && c <= '9') || (c >= 'A' && c <= 'F') || (c >= 'a' && c <= 'f')) {
+			if (c < '0' || c > '9') && (c < 'A' || c > 'F') && (c < 'a' || c > 'f') {
 				return ""
 			}
 		}

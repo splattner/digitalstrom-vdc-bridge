@@ -1,0 +1,21 @@
+version: "2"
+
+linters:
+  settings:
+    errcheck:
+      # Best-effort cleanup on already-finished I/O (closing a listener,
+      # connection, response body, or gzip/tar writer after we're done with
+      # it) doesn't need its error checked — there's nothing actionable to
+      # do with it.
+      exclude-functions:
+        - (io.Closer).Close
+        - (net.Listener).Close
+        - (net.Conn).Close
+        - (*compress/gzip.Writer).Close
+        - (*archive/tar.Writer).Close
+        - (*github.com/coder/websocket.Conn).CloseNow
+  exclusions:
+    paths:
+      # Vendored Go files pulled in transitively by an npm package (flatted's
+      # golang bindings) — not code we own or want linted.
+      - web/node_modules

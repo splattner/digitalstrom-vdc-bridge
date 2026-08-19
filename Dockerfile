@@ -8,7 +8,7 @@ RUN npm run build
 # Output lands at /app/pkg/httpapi/webdist (vite outDir: ../pkg/httpapi/webdist)
 
 # ── Stage 2: Build Go binary ──────────────────────────────────────────────────
-FROM golang:1.26-alpine AS go-builder
+FROM golang:1.27-alpine AS go-builder
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download

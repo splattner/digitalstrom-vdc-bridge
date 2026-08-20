@@ -18,8 +18,11 @@ import (
 )
 
 // newShellyTestServer returns an httptest.Server that answers
-// Shelly.GetDeviceInfo and Shelly.GetStatus RPC calls for a single fake device.
-func newShellyTestServer(t *testing.T, id, app string, gen int, authEn bool, status map[string]map[string]any) *httptest.Server {
+// Shelly.GetDeviceInfo, Shelly.GetStatus, and Input.GetConfig RPC calls for a
+// single fake device. inputTypes maps an input index to its configured
+// Input.GetConfig "type" ("switch", "button", ...); a missing index answers
+// with an empty type (the binary-input default).
+func newShellyTestServer(t *testing.T, id, app string, gen int, authEn bool, status map[string]map[string]any, inputTypes map[int]string) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req rpcRequest
@@ -35,6 +38,10 @@ func newShellyTestServer(t *testing.T, id, app string, gen int, authEn bool, sta
 			}
 		case "Shelly.GetStatus":
 			result = status
+		case "Input.GetConfig":
+			params, _ := req.Params.(map[string]any)
+			idx := int(params["id"].(float64))
+			result = map[string]any{"id": idx, "type": inputTypes[idx]}
 		default:
 			t.Fatalf("unexpected RPC method %q", req.Method)
 		}
@@ -76,7 +83,7 @@ func TestHandleEntryNewDeviceFiresOnFound(t *testing.T) {
 		"switch:0": {"output": false},
 		"input:0":  {"state": false},
 	}
-	ts := newShellyTestServer(t, "shellyplus1pm-aabbcc", "Plus1PM", 2, false, status)
+	ts := newShellyTestServer(t, "shellyplus1pm-aabbcc", "Plus1PM", 2, false, status, nil)
 	defer ts.Close()
 
 	found := make(chan discoveredDevice, 1)
@@ -104,7 +111,7 @@ func TestHandleEntryNewDeviceFiresOnFound(t *testing.T) {
 // at the same address. Both must resolve to exactly one discovered device.
 func TestHandleEntryFriendlyNameDuplicateCollapses(t *testing.T) {
 	status := map[string]map[string]any{"switch:0": {"output": false}}
-	ts := newShellyTestServer(t, "shellyplus1pm-aabbcc", "Plus1PM", 2, false, status)
+	ts := newShellyTestServer(t, "shellyplus1pm-aabbcc", "Plus1PM", 2, false, status, nil)
 	defer ts.Close()
 
 	var mu sync.Mutex
@@ -150,7 +157,7 @@ func TestHandleEntryFriendlyNameDuplicateCollapses(t *testing.T) {
 }
 
 func TestHandleEntrySkipsGen1(t *testing.T) {
-	ts := newShellyTestServer(t, "shellyswitch-aabbcc", "SW", 1, false, nil)
+	ts := newShellyTestServer(t, "shellyswitch-aabbcc", "SW", 1, false, nil, nil)
 	defer ts.Close()
 
 	var found int32
@@ -168,7 +175,7 @@ func TestHandleEntrySkipsGen1(t *testing.T) {
 }
 
 func TestHandleEntrySkipsAuthEnabled(t *testing.T) {
-	ts := newShellyTestServer(t, "shellypro1-aabbcc", "Pro1", 2, true, map[string]map[string]any{"switch:0": {"output": false}})
+	ts := newShellyTestServer(t, "shellypro1-aabbcc", "Pro1", 2, true, map[string]map[string]any{"switch:0": {"output": false}}, nil)
 	defer ts.Close()
 
 	errCh := make(chan error, 1)
@@ -195,5 +202,47 @@ func TestHandleEntryIgnoresEntryWithoutIPv4(t *testing.T) {
 	s.handleEntry(context.Background(), entry)
 	if len(s.All()) != 0 {
 		t.Fatal("expected no device recorded for an entry with no AddrIPv4")
+	}
+}
+
+// TestHandleEntryComputesEntitiesEndToEnd exercises the full enrichment path
+// — Shelly.GetDeviceInfo, Shelly.GetStatus, and one Input.GetConfig call per
+// input — for a Pro1-shaped device: a metered relay plus a switch-type and a
+// button-type input, which should resolve to three separate entities.
+func TestHandleEntryComputesEntitiesEndToEnd(t *testing.T) {
+	status := map[string]map[string]any{
+		"switch:0": {
+			"output": false, "apower": 0.0, "voltage": 230.0, "current": 0.0,
+			"aenergy": map[string]any{"total": 100.0}, "temperature": map[string]any{"tC": 30.0},
+		},
+		"input:0": {"state": false},
+		"input:1": {"state": false},
+	}
+	ts := newShellyTestServer(t, "shellypro1-aabbcc", "Pro1", 2, false, status, map[int]string{0: "switch", 1: "button"})
+	defer ts.Close()
+
+	found := make(chan discoveredDevice, 1)
+	s := newScanner(func(d discoveredDevice) { found <- d }, nil, nil)
+	entry := serviceEntryForServer(t, ts, "shellypro1-aabbcc", 2)
+	s.handleEntry(context.Background(), entry)
+
+	var dev discoveredDevice
+	select {
+	case dev = <-found:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for onFound")
+	}
+
+	if len(dev.Entities) != 3 {
+		t.Fatalf("expected 3 entities (light, button, sensor), got %d: %+v", len(dev.Entities), dev.Entities)
+	}
+	kinds := make(map[string]bool)
+	for _, e := range dev.Entities {
+		kinds[e.Kind] = true
+	}
+	for _, want := range []string{"light", "button", "sensor"} {
+		if !kinds[want] {
+			t.Errorf("expected an entity of kind %q among %+v", want, dev.Entities)
+		}
 	}
 }

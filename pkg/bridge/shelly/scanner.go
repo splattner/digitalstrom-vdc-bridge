@@ -33,6 +33,9 @@ type discoveredDevice struct {
 	Addr        string // "host:port"
 	AuthEnabled bool
 	Components  []component
+	// Entities is the precomputed bridgeable entity list derived from
+	// Components — see buildEntities.
+	Entities []entitySpec
 }
 
 // deviceInfo mirrors the fields we use from Shelly.GetDeviceInfo.
@@ -207,6 +210,24 @@ func (s *scanner) enrich(ctx context.Context, addr string) {
 		return
 	}
 
+	components := parseComponents(status)
+	inputTypes := make(map[int]string)
+	for _, c := range components {
+		if c.Kind != "input" {
+			continue
+		}
+		cfg, err := fetchInputConfig(enrichCtx, addr, info.ID, c.Index)
+		if err != nil {
+			// Fall back to treating it as a binary input (the safer default —
+			// a wrongly-assumed "button" would silently drop a wired sensor).
+			logging.Warn("shelly_enrich_input_config_error", logging.Fields{
+				"addr": addr, "index": c.Index, "error": err.Error(),
+			})
+			continue
+		}
+		inputTypes[c.Index] = cfg.Type
+	}
+
 	name := ""
 	if info.Name != nil {
 		name = *info.Name
@@ -219,7 +240,8 @@ func (s *scanner) enrich(ctx context.Context, addr string) {
 		FW:          info.Ver,
 		Addr:        addr,
 		AuthEnabled: info.AuthEnabled,
-		Components:  parseComponents(status),
+		Components:  components,
+		Entities:    buildEntities(components, status, inputTypes),
 	}
 
 	s.mu.Lock()
@@ -293,4 +315,25 @@ func fetchStatus(ctx context.Context, addr, src string) (map[string]map[string]a
 		out[k] = sub
 	}
 	return out, nil
+}
+
+// inputConfig mirrors the fields we use from Input.GetConfig — its "type"
+// ("switch", "button", "analog", ...) determines whether an input becomes
+// part of the merged binary-input entity or its own button entity, and
+// there is no other way to learn it (Shelly.GetStatus reports only the
+// input's current state, not its configured type).
+type inputConfig struct {
+	Type string `json:"type"`
+}
+
+func fetchInputConfig(ctx context.Context, addr, src string, id int) (inputConfig, error) {
+	result, err := callHTTP(ctx, addr, src, "Input.GetConfig", map[string]any{"id": id})
+	if err != nil {
+		return inputConfig{}, err
+	}
+	var cfg inputConfig
+	if err := json.Unmarshal(result, &cfg); err != nil {
+		return inputConfig{}, fmt.Errorf("decode input config: %w", err)
+	}
+	return cfg, nil
 }

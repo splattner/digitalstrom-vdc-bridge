@@ -26,6 +26,7 @@ type deviceClient struct {
 	// callbacks (set before start)
 	onStatus func(map[string]map[string]any) // called after every status merge
 	onConn   func(string)                    // "connecting", "connected", "reconnecting"
+	onEvent  func([]shellyEvent)             // called for every NotifyEvent (button pushes)
 
 	status *deviceStatus
 
@@ -34,6 +35,20 @@ type deviceClient struct {
 	reqID     atomic.Int32
 	cancel    context.CancelFunc
 	wg        sync.WaitGroup
+}
+
+// shellyEvent is one entry of a Shelly Gen2+ NotifyEvent's "events" array —
+// used for input button pushes ("single_push", "double_push", "long_push").
+// NotifyEvent is pure live push with no retained/replay semantics (unlike
+// MQTT), so unlike Zigbee2MQTT's retained-message handling there is no risk
+// of a stale event firing on reconnect — nothing to suppress here.
+type shellyEvent struct {
+	Component string `json:"component"`
+	Event     string `json:"event"`
+}
+
+type notifyEventParams struct {
+	Events []shellyEvent `json:"events"`
 }
 
 func newDeviceClient(addr, devID, src string) *deviceClient {
@@ -198,6 +213,17 @@ func (c *deviceClient) handleFrame(msg []byte) {
 		return
 	}
 
+	if f.Method == "NotifyEvent" {
+		var params notifyEventParams
+		if err := json.Unmarshal(f.Params, &params); err != nil {
+			return
+		}
+		if c.onEvent != nil {
+			c.onEvent(params.Events)
+		}
+		return
+	}
+
 	var payload map[string]any
 	switch {
 	case f.Method == "NotifyStatus" || f.Method == "NotifyFullStatus":
@@ -211,7 +237,7 @@ func (c *deviceClient) handleFrame(msg []byte) {
 			return
 		}
 	default:
-		return // NotifyEvent and anything else is out of scope for PR1
+		return
 	}
 
 	c.status.merge(payload)

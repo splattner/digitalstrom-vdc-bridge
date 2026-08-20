@@ -1,6 +1,9 @@
 package shelly
 
-import "sync"
+import (
+	"strings"
+	"sync"
+)
 
 // deviceStatus is a merged, in-memory cache of a Shelly device's component
 // status. NotifyStatus pushes are deltas (only the fields that changed, and a
@@ -75,6 +78,37 @@ func (s *deviceStatus) component(key string) (map[string]any, bool) {
 		cp[fk] = fv
 	}
 	return cp, true
+}
+
+// lookupDotted reads a possibly-nested field, e.g. "aenergy.total" reads
+// fields["aenergy"]["total"]. Returns the raw decoded value and whether it
+// was present at every level of the path.
+func lookupDotted(fields map[string]any, path string) (any, bool) {
+	if fields == nil {
+		return nil, false
+	}
+	var cur any = fields
+	for _, part := range strings.Split(path, ".") {
+		m, ok := cur.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		v, ok := m[part]
+		if !ok {
+			return nil, false
+		}
+		cur = v
+	}
+	return cur, true
+}
+
+func numberFieldDotted(fields map[string]any, path string) (float64, bool) {
+	v, ok := lookupDotted(fields, path)
+	if !ok {
+		return 0, false
+	}
+	n, ok := v.(float64)
+	return n, ok
 }
 
 func boolField(m map[string]any, key string) (bool, bool) {

@@ -36,15 +36,21 @@ func Factory() bridge.Factory {
 	}
 }
 
-// deviceSub is the per-mapping runtime state for a subscribed component.
+// deviceSub is the per-mapping runtime state for a subscribed entity.
 type deviceSub struct {
-	mapping   bridge.Mapping
-	deviceID  string
-	component component
+	mapping  bridge.Mapping
+	deviceID string
+	// identity is this entity's identifying component, parsed from
+	// mapping.RemoteEntityID — used to find spec in the device's Entities
+	// once known.
+	identity component
+	// spec is resolved once activate() finds a matching entitySpec for
+	// identity; zero value until then.
+	spec entitySpec
 	// activated is true once this subscription has an active shared client
-	// wired up. False while waiting for the device to be seen via mDNS, or
-	// after its client was torn down for an address change and is awaiting
-	// re-activation.
+	// wired up and spec resolved. False while waiting for the device to be
+	// seen via mDNS, or after its client was torn down for an address
+	// change and is awaiting re-activation.
 	activated bool
 }
 
@@ -95,12 +101,12 @@ func (p *Plugin) Status() string {
 	return "not_initialized"
 }
 
-// Stats reports the discovered (bridgeable components across every seen
+// Stats reports the discovered (bridgeable entities across every seen
 // device) and active (subscribed) counts.
 func (p *Plugin) Stats() bridge.PluginStats {
 	discovered := 0
 	for _, d := range p.scanner.All() {
-		discovered += bridgeableCount(d.Components)
+		discovered += len(d.Entities)
 	}
 	p.mu.RLock()
 	active := len(p.subscribed)
@@ -129,38 +135,47 @@ func (p *Plugin) Init(ctx context.Context, _ map[string]any, host bridge.Host) e
 	return nil
 }
 
-// Discover returns all bridgeable components of every Shelly device
-// currently visible on the network.
+// Discover returns all bridgeable entities of every Shelly device currently
+// visible on the network.
 func (p *Plugin) Discover(_ context.Context) ([]bridge.RemoteEntity, error) {
 	devs := p.scanner.All()
 	out := make([]bridge.RemoteEntity, 0, len(devs))
 	for _, d := range devs {
-		multi := bridgeableCount(d.Components) > 1
-		for _, c := range d.Components {
-			kind, ok := bridgeKindFor(c)
-			if !ok {
-				continue
-			}
+		multi := len(d.Entities) > 1
+		for _, e := range d.Entities {
 			name := displayName(d)
 			if multi {
-				name = fmt.Sprintf("%s %s", name, c.key())
+				name = fmt.Sprintf("%s · %s", name, entitySuffix(e))
 			}
 			out = append(out, bridge.RemoteEntity{
-				ID:   entityID(d.ID, c),
+				ID:   entityID(d.ID, e.Component),
 				Name: name,
-				Kind: kind,
+				Kind: e.Kind,
 				Attributes: map[string]any{
 					"device_id": d.ID,
 					"addr":      d.Addr,
 					"model":     d.Model,
 					"gen":       d.Gen,
 					"fw":        d.FW,
-					"component": c.key(),
+					"component": e.Component.key(),
 				},
 			})
 		}
 	}
 	return out, nil
+}
+
+// entitySuffix names the part of a multi-entity device's display name that
+// distinguishes it from its siblings.
+func entitySuffix(e entitySpec) string {
+	switch e.Kind {
+	case "sensor", "binary":
+		return "sensors"
+	case "button":
+		return fmt.Sprintf("button %d", e.Component.Index)
+	default:
+		return e.Component.key()
+	}
 }
 
 func displayName(d discoveredDevice) string {
@@ -180,7 +195,7 @@ func (p *Plugin) Subscribe(_ context.Context, m bridge.Mapping) error {
 	if !ok {
 		return fmt.Errorf("shelly: invalid remote entity id %q", m.RemoteEntityID)
 	}
-	sub := &deviceSub{mapping: m, deviceID: devID, component: c}
+	sub := &deviceSub{mapping: m, deviceID: devID, identity: c}
 
 	p.mu.Lock()
 	p.subscribed[m.DSUID] = sub
@@ -244,15 +259,15 @@ func (p *Plugin) Apply(ctx context.Context, m bridge.Mapping, cmd bridge.Command
 		return nil // only channel 0 (on/off, brightness) is exposed so far
 	}
 
-	switch sub.component.Kind {
+	switch sub.identity.Kind {
 	case "switch":
-		return client.setSwitch(ctx, sub.component.Index, cmd.Value > 0)
+		return client.setSwitch(ctx, sub.identity.Index, cmd.Value > 0)
 	case "light":
 		if cmd.Value <= 0 {
-			return client.setLight(ctx, sub.component.Index, false, nil)
+			return client.setLight(ctx, sub.identity.Index, false, nil)
 		}
 		bri := clampF(cmd.Value, 0, 100)
-		return client.setLight(ctx, sub.component.Index, true, &bri)
+		return client.setLight(ctx, sub.identity.Index, true, &bri)
 	}
 	return nil
 }
@@ -320,20 +335,32 @@ func (p *Plugin) onDeviceFound(dev discoveredDevice) {
 }
 
 // activate wires a subscription to the (possibly newly created) shared
-// client for its device, then pushes whatever state is already cached so the
-// entity reflects reality immediately rather than waiting for the next push.
+// client for its device, resolves its entitySpec, pushes sensor/binary
+// descriptors if it needs them, then pushes whatever state is already
+// cached so the entity reflects reality immediately rather than waiting for
+// the next push.
 func (p *Plugin) activate(sub *deviceSub, dev discoveredDevice) {
 	p.mu.Lock()
 	if sub.activated {
 		p.mu.Unlock()
 		return
 	}
+	spec, found := entityForComponent(dev.Entities, sub.identity)
+	if !found {
+		p.mu.Unlock()
+		logging.Warn("shelly_activate_no_entity", logging.Fields{
+			"dsuid": sub.mapping.DSUID, "device_id": dev.ID, "component": sub.identity.key(),
+		})
+		return
+	}
+	sub.spec = spec
 	sub.activated = true
 	sc, exists := p.clients[dev.ID]
 	if !exists {
 		c := newDeviceClient(dev.Addr, dev.ID, "vdcgo-"+p.id)
 		c.onStatus = func(status map[string]map[string]any) { p.handleStatus(dev.ID, status) }
 		c.onConn = func(s string) { p.handleConnState(dev.ID, s) }
+		c.onEvent = func(events []shellyEvent) { p.handleEvents(dev.ID, events) }
 		sc = &sharedClient{client: c}
 		p.clients[dev.ID] = sc
 	}
@@ -344,61 +371,184 @@ func (p *Plugin) activate(sub *deviceSub, dev discoveredDevice) {
 		sc.client.start(p.ctx)
 	}
 
-	if fields, ok := sc.client.status.component(sub.component.key()); ok {
-		p.applyComponent(sub, fields)
+	if spec.Kind == "sensor" || spec.Kind == "binary" {
+		p.pushDescriptors(sub)
 	}
+	p.applySpec(sub, sc.client.status.snapshot())
 
 	logging.Info("shelly_subscribed", logging.Fields{
-		"dsuid": sub.mapping.DSUID, "device_id": dev.ID, "component": sub.component.key(),
+		"dsuid": sub.mapping.DSUID, "device_id": dev.ID, "component": sub.identity.key(),
 	})
 	p.host.Log(bridge.LevelInfo, bridge.CodeSubscribeOK, "device subscribed",
-		map[string]any{"dsuid": sub.mapping.DSUID, "device_id": dev.ID, "component": sub.component.key()})
+		map[string]any{"dsuid": sub.mapping.DSUID, "device_id": dev.ID, "component": sub.identity.key()})
+}
+
+// pushDescriptors publishes SetSensorDescriptor/SetBinaryInputDescriptor for
+// a sensor/binary entity's features, then triggers a ReAnnounce so the vDSM
+// re-queries the device now that descriptors are available — mirroring
+// Zigbee2MQTT's activate() (pkg/bridge/zigbee2mqtt/zigbee2mqtt.go).
+func (p *Plugin) pushDescriptors(sub *deviceSub) {
+	ctx := context.Background()
+	for _, sf := range sub.spec.SensorFeatures {
+		if err := p.host.SetSensorDescriptor(ctx, sub.mapping.DSUID, sf.Index, bridge.SensorDescriptor{
+			Type: sf.Meta.Type, Usage: sf.Meta.Usage, Name: sf.Meta.Name,
+			Min: sf.Meta.Min, Max: sf.Meta.Max, Resolution: sf.Meta.Resolution,
+			SIUnit: sf.Meta.SIUnit, Symbol: sf.Meta.Symbol,
+		}); err != nil {
+			logging.Warn("shelly_set_sensor_descriptor_error", logging.Fields{"dsuid": sub.mapping.DSUID, "error": err.Error()})
+		}
+	}
+	for _, bf := range sub.spec.BinaryFeatures {
+		// Shelly's input:N carries no semantic meaning of its own (it's a dry
+		// contact wired to whatever the installer connected) — Function 0
+		// ("none") is the only honest default; Zigbee2MQTT can do better here
+		// because its exposes name the actual sensor type (occupancy, contact, ...).
+		if err := p.host.SetBinaryInputDescriptor(ctx, sub.mapping.DSUID, bf.Index, bridge.BinaryInputDescriptor{
+			Name: fmt.Sprintf("input %d", bf.Source.Index), Function: 0,
+		}); err != nil {
+			logging.Warn("shelly_set_binary_descriptor_error", logging.Fields{"dsuid": sub.mapping.DSUID, "error": err.Error()})
+		}
+	}
+	if err := p.host.ReAnnounce(ctx, sub.mapping.DSUID); err != nil {
+		logging.Warn("shelly_reannounce_error", logging.Fields{"dsuid": sub.mapping.DSUID, "error": err.Error()})
+	}
 }
 
 // handleStatus is called by a shared client whenever its device's status
-// changes; it fans the update out to every subscription on that device.
+// changes; it fans the update out to every activated subscription on that
+// device.
 func (p *Plugin) handleStatus(deviceID string, status map[string]map[string]any) {
 	p.mu.RLock()
 	var subs []*deviceSub
 	for _, sub := range p.subscribed {
-		if sub.deviceID == deviceID {
+		if sub.deviceID == deviceID && sub.activated {
 			subs = append(subs, sub)
 		}
 	}
 	p.mu.RUnlock()
 
 	for _, sub := range subs {
-		fields, ok := status[sub.component.key()]
-		if !ok {
-			continue
-		}
-		p.applyComponent(sub, fields)
+		p.applySpec(sub, status)
 	}
 }
 
-// applyComponent pushes one component's cached fields to the host as a
-// channel update, based on the subscription's component kind.
-func (p *Plugin) applyComponent(sub *deviceSub, fields map[string]any) {
+// applySpec pushes an activated subscription's current values to the host,
+// based on its entitySpec's kind. Button entities have no status fields —
+// they're driven by NotifyEvent via handleEvents instead — so this is a
+// no-op for them (and, notably, doesn't call UpdateActive for them either;
+// device online/offline already covers that uniformly via handleConnState).
+func (p *Plugin) applySpec(sub *deviceSub, status map[string]map[string]any) {
 	ctx := context.Background()
-	var (
-		v  float64
-		ok bool
-	)
-	switch sub.component.Kind {
-	case "switch":
-		v, ok = switchChannelValue(fields)
+	switch sub.spec.Kind {
 	case "light":
-		v, ok = lightChannelValue(fields)
+		fields := status[sub.identity.key()]
+		if v, ok := switchChannelValue(fields); ok {
+			if err := p.host.UpdateChannel(ctx, sub.mapping.DSUID, 0, v); err != nil {
+				logging.Warn("shelly_update_channel_error", logging.Fields{"dsuid": sub.mapping.DSUID, "error": err.Error()})
+			}
+		}
+	case "dimmer":
+		fields := status[sub.identity.key()]
+		if v, ok := lightChannelValue(fields); ok {
+			if err := p.host.UpdateChannel(ctx, sub.mapping.DSUID, 0, v); err != nil {
+				logging.Warn("shelly_update_channel_error", logging.Fields{"dsuid": sub.mapping.DSUID, "error": err.Error()})
+			}
+		}
+	case "sensor", "binary":
+		for _, sf := range sub.spec.SensorFeatures {
+			v, ok := numberFieldDotted(status[sf.Source.key()], sf.Field)
+			if !ok {
+				continue
+			}
+			if sf.Field == "aenergy.total" {
+				v /= 1000 // Wh -> kWh
+			}
+			if err := p.host.UpdateSensor(ctx, sub.mapping.DSUID, sf.Index, v); err != nil {
+				logging.Warn("shelly_update_sensor_error", logging.Fields{"dsuid": sub.mapping.DSUID, "error": err.Error()})
+			}
+		}
+		for _, bf := range sub.spec.BinaryFeatures {
+			v, ok := boolField(status[bf.Source.key()], bf.Field)
+			if !ok {
+				continue
+			}
+			iv := 0.0
+			if v {
+				iv = 1.0
+			}
+			if err := p.host.UpdateInput(ctx, sub.mapping.DSUID, bf.Index, iv); err != nil {
+				logging.Warn("shelly_update_input_error", logging.Fields{"dsuid": sub.mapping.DSUID, "error": err.Error()})
+			}
+		}
+	case "button":
+		return
 	default:
 		return
 	}
-	if ok {
-		if err := p.host.UpdateChannel(ctx, sub.mapping.DSUID, 0, v); err != nil {
-			logging.Warn("shelly_update_channel_error", logging.Fields{"dsuid": sub.mapping.DSUID, "error": err.Error()})
-		}
-	}
 	if err := p.host.UpdateActive(ctx, sub.mapping.DSUID, true); err != nil {
 		logging.Warn("shelly_update_active_error", logging.Fields{"dsuid": sub.mapping.DSUID, "error": err.Error()})
+	}
+}
+
+// handleEvents is called by a shared client for every NotifyEvent frame; it
+// dispatches input button pushes to whichever button subscription owns the
+// event's component.
+func (p *Plugin) handleEvents(deviceID string, events []shellyEvent) {
+	p.mu.RLock()
+	var subs []*deviceSub
+	for _, sub := range p.subscribed {
+		if sub.deviceID == deviceID && sub.activated && sub.spec.Kind == "button" {
+			subs = append(subs, sub)
+		}
+	}
+	p.mu.RUnlock()
+
+	for _, ev := range events {
+		action := mapInputEvent(ev.Event)
+		if action == "" {
+			continue
+		}
+		for _, sub := range subs {
+			if sub.identity.key() == ev.Component {
+				p.dispatchButtonAction(sub, action)
+			}
+		}
+	}
+}
+
+// mapInputEvent maps a Shelly Gen2+ input event name to a dS button click
+// type (Host.SetButtonAction's vocabulary: "tip", "tip2", "tip3", "tip4",
+// "hold"). Unlike Zigbee2MQTT, Shelly reports "long_push" as a single
+// discrete event rather than a hold/release pair, so there is no separate
+// release to track.
+func mapInputEvent(event string) string {
+	switch event {
+	case "single_push":
+		return "tip"
+	case "double_push":
+		return "tip2"
+	case "triple_push":
+		return "tip3"
+	case "long_push":
+		return "hold"
+	default:
+		return ""
+	}
+}
+
+// dispatchButtonAction pulses UpdateButton 1->0 around a SetButtonAction
+// call, the same discrete-event pattern Zigbee2MQTT uses for its own tip
+// events (pkg/bridge/zigbee2mqtt/zigbee2mqtt.go's dispatchButtonAction).
+func (p *Plugin) dispatchButtonAction(sub *deviceSub, action string) {
+	ctx := context.Background()
+	if err := p.host.UpdateButton(ctx, sub.mapping.DSUID, 0, 1); err != nil {
+		logging.Warn("shelly_update_button_error", logging.Fields{"dsuid": sub.mapping.DSUID, "error": err.Error()})
+	}
+	if err := p.host.SetButtonAction(ctx, sub.mapping.DSUID, 0, action); err != nil {
+		logging.Warn("shelly_set_button_action_error", logging.Fields{"dsuid": sub.mapping.DSUID, "error": err.Error()})
+	}
+	if err := p.host.UpdateButton(ctx, sub.mapping.DSUID, 0, 0); err != nil {
+		logging.Warn("shelly_update_button_error", logging.Fields{"dsuid": sub.mapping.DSUID, "error": err.Error()})
 	}
 }
 

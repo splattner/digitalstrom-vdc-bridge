@@ -2,6 +2,38 @@ package shelly
 
 import "testing"
 
+func TestLookupDotted(t *testing.T) {
+	fields := map[string]any{
+		"output":  true,
+		"aenergy": map[string]any{"total": 1500.0},
+	}
+	if v, ok := lookupDotted(fields, "output"); !ok || v != true {
+		t.Errorf("lookupDotted(output) = (%v, %v), want (true, true)", v, ok)
+	}
+	if v, ok := lookupDotted(fields, "aenergy.total"); !ok || v != 1500.0 {
+		t.Errorf("lookupDotted(aenergy.total) = (%v, %v), want (1500.0, true)", v, ok)
+	}
+	if _, ok := lookupDotted(fields, "aenergy.missing"); ok {
+		t.Error("expected lookupDotted to report not found for a missing nested field")
+	}
+	if _, ok := lookupDotted(fields, "output.nope"); ok {
+		t.Error("expected lookupDotted to report not found when descending into a non-object value")
+	}
+	if _, ok := lookupDotted(nil, "output"); ok {
+		t.Error("expected lookupDotted(nil, ...) to report not found")
+	}
+}
+
+func TestNumberFieldDotted(t *testing.T) {
+	fields := map[string]any{"aenergy": map[string]any{"total": 1500.0}, "state": "not a number"}
+	if v, ok := numberFieldDotted(fields, "aenergy.total"); !ok || v != 1500.0 {
+		t.Errorf("numberFieldDotted(aenergy.total) = (%v, %v), want (1500.0, true)", v, ok)
+	}
+	if _, ok := numberFieldDotted(fields, "state"); ok {
+		t.Error("expected numberFieldDotted to report not-a-number as not found")
+	}
+}
+
 func TestDeviceStatusMergeAndOverwrite(t *testing.T) {
 	s := newDeviceStatus()
 	s.merge(map[string]any{

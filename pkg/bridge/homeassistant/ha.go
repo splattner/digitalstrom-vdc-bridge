@@ -416,6 +416,7 @@ func (p *Plugin) handleSnapshot(snap map[string]haEntity) {
 
 	p.host.Log(bridge.LevelInfo, bridge.CodeDiscoveryDone, "HA state snapshot received",
 		map[string]any{"total": len(snap), "visible": visible, "filtered": filtered})
+	p.host.NotifyDiscoveryChanged()
 
 	ctx := context.Background()
 	for _, m := range subs {
@@ -438,6 +439,7 @@ func (p *Plugin) handleStateChange(sc stateChange) {
 		if existed {
 			p.host.Log(bridge.LevelInfo, bridge.CodeEntityRemoved, "HA entity removed",
 				map[string]any{"entity_id": sc.EntityID})
+			p.host.NotifyDiscoveryChanged()
 		}
 		return
 	}
@@ -464,6 +466,7 @@ func (p *Plugin) handleStateChange(sc stateChange) {
 					"kind":      classifyEntity(*sc.NewState),
 					"state":     sc.NewState.State,
 				})
+			p.host.NotifyDiscoveryChanged()
 		}
 	}
 

@@ -277,8 +277,12 @@ func (p *Plugin) onDiscovery(ctx context.Context, topic string, payload []byte) 
 	if len(payload) == 0 {
 		// Tombstone — Tasmota was un-discovered (rare).
 		p.mu.Lock()
+		_, existed := p.devices[mac]
 		delete(p.devices, mac)
 		p.mu.Unlock()
+		if existed {
+			p.host.NotifyDiscoveryChanged()
+		}
 		return
 	}
 	var c discoveryConfig
@@ -313,6 +317,7 @@ func (p *Plugin) onDiscovery(ctx context.Context, topic string, payload []byte) 
 		})
 		p.host.Log(bridge.LevelInfo, bridge.CodeEntityAdded, "Tasmota device discovered",
 			map[string]any{"mac": c.MAC, "model": c.Model, "topic": c.Topic, "relays": c.relayCount()})
+		p.host.NotifyDiscoveryChanged()
 	}
 	for _, sub := range pending {
 		p.activate(sub, dev)

@@ -218,6 +218,7 @@ func (p *Plugin) onEvent(e runtime.Event) {
 		}
 		m, subscribed := p.subs[e.UniqueID]
 		p.mu.Unlock()
+		p.host.NotifyDiscoveryChanged()
 
 		if subscribed {
 			am := m
@@ -236,6 +237,7 @@ func (p *Plugin) onEvent(e runtime.Event) {
 		delete(p.devices, e.UniqueID)
 		m, subscribed := p.subs[e.UniqueID]
 		p.mu.Unlock()
+		p.host.NotifyDiscoveryChanged()
 
 		if subscribed {
 			if err := p.host.UpdateActive(context.Background(), m.DSUID, false); err != nil {

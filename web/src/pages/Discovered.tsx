@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowDownUp, ArrowDown, ArrowUp, Search, X,
@@ -9,7 +9,8 @@ import {
 } from 'lucide-react'
 import {
   api,
-  type DiscoveredEntity, type Plugin,
+  connectEvents,
+  type DiscoveredEntity, type Plugin, type WsEvent,
 } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { useToasts } from '@/lib/toasts'
@@ -190,15 +191,29 @@ export default function DiscoveredPage() {
     refetchInterval: 5_000,
   })
 
-  // Discovered entities for every plugin (one parallel query each).
+  // Discovered entities for every plugin (one parallel query each). The
+  // interval here is just a resilience backstop for a missed WS event (e.g.
+  // a reconnect gap) — normally a plugin's list is refreshed immediately via
+  // the discoveryChanged event below.
   const discoveredQueries = useQueries({
     queries: (plugins ?? []).map((p: Plugin) => ({
       queryKey: ['discovered', p.id],
       queryFn: () => api.discovered(p.id),
-      refetchInterval: 10_000,
+      refetchInterval: 60_000,
       retry: false,
     })),
   })
+
+  // Refresh a plugin's discovered list immediately when it reports a change,
+  // instead of waiting for the backstop poll above.
+  useEffect(() => {
+    return connectEvents((e: WsEvent) => {
+      if (e.type === 'discoveryChanged') {
+        const pluginId = (e.data as { pluginId?: string } | undefined)?.pluginId
+        void qc.invalidateQueries({ queryKey: pluginId ? ['discovered', pluginId] : ['discovered'] })
+      }
+    })
+  }, [qc])
 
   // Currently active bridges (for resolving DSUID on un-bridge).
   const { data: bridges } = useQuery({

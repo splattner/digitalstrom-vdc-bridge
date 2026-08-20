@@ -89,8 +89,9 @@ func (h *fakeHost) UpdateActive(_ context.Context, dsuid string, active bool) er
 	h.active[dsuid] = active
 	return nil
 }
-func (h *fakeHost) MQTT() *mqtt.Manager                                      { return nil }
-func (h *fakeHost) Log(LogLevel, string, string, map[string]any)             {}
+func (h *fakeHost) MQTT() *mqtt.Manager                          { return nil }
+func (h *fakeHost) Log(LogLevel, string, string, map[string]any) {}
+func (h *fakeHost) NotifyDiscoveryChanged()                      {}
 
 // ── fakePlugin: a scriptable Plugin implementation. ─────────────────────────
 
@@ -989,5 +990,39 @@ func TestRegistrySupervisorSkipsDisabledPlugins(t *testing.T) {
 	time.Sleep(30 * time.Millisecond) // give the supervisor a few ticks
 	if got := atomic.LoadInt32(&calls); got != 0 {
 		t.Fatalf("expected the supervisor to never instantiate a disabled plugin, got %d factory calls", got)
+	}
+}
+
+// ── Registry: discovery-change push notification ────────────────────────────
+
+func TestRegistryNotifyDiscoveryChangedReachesNotifier(t *testing.T) {
+	reg, _, instances := newTestRegistry()
+
+	var mu sync.Mutex
+	var gotType string
+	var gotData map[string]any
+	reg.SetNotifier(func(eventType string, data map[string]any) {
+		mu.Lock()
+		defer mu.Unlock()
+		gotType = eventType
+		gotData = data
+	})
+
+	if err := reg.AddPlugin(context.Background(), PluginConfig{ID: "p1", Type: "fake"}); err != nil {
+		t.Fatalf("AddPlugin: %v", err)
+	}
+
+	// The Host each plugin receives at Init is the Registry's pluginHost
+	// wrapper, which forwards NotifyDiscoveryChanged to the Registry.
+	ph := instances["p1"].lastInitHost
+	ph.NotifyDiscoveryChanged()
+
+	mu.Lock()
+	defer mu.Unlock()
+	if gotType != "discoveryChanged" {
+		t.Fatalf("expected a discoveryChanged event, got type %q", gotType)
+	}
+	if gotData["pluginId"] != "p1" {
+		t.Fatalf("expected pluginId p1 in event data, got %+v", gotData)
 	}
 }

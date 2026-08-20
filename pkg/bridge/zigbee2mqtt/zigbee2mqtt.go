@@ -312,12 +312,6 @@ func (p *Plugin) applyToEndpoint(ctx context.Context, sub *deviceSub, ep endpoin
 	payload := map[string]any{}
 
 	switch cmd.Type {
-	case "setActive":
-		payload[ep.StateProp] = onOff(cmd.Active)
-
-	case "callScene":
-		payload[ep.StateProp] = onOff(cmd.Scene != 0)
-
 	case "setChannel":
 		switch cmd.Channel {
 		case 0: // brightness / on-off
@@ -823,13 +817,6 @@ func (p *Plugin) publish(ctx context.Context, topic string, payload []byte) erro
 		return err
 	}
 	return nil
-}
-
-func onOff(b bool) string {
-	if b {
-		return "ON"
-	}
-	return "OFF"
 }
 
 // ── config ────────────────────────────────────────────────────────────────────

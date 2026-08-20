@@ -213,20 +213,6 @@ func (p *Plugin) Apply(ctx context.Context, m bridge.Mapping, cmd bridge.Command
 	offPayload := func() string { off, _ := dev.cfg.powerStates(); return off }()
 
 	switch cmd.Type {
-	case "setActive":
-		payload := offPayload
-		if cmd.Active {
-			payload = onPayload
-		}
-		return p.publish(ctx, dev.cfg.cmndTopic(powerSuffix), []byte(payload))
-
-	case "callScene":
-		payload := offPayload
-		if cmd.Scene != 0 {
-			payload = onPayload
-		}
-		return p.publish(ctx, dev.cfg.cmndTopic(powerSuffix), []byte(payload))
-
 	case "setChannel":
 		switch cmd.Channel {
 		case 0: // brightness / on-off

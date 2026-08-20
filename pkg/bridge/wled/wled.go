@@ -372,12 +372,25 @@ func (p *Plugin) buildPayload(m bridge.Mapping, cmd bridge.Command) (map[string]
 			}, nil
 		}
 
-	case "callScene":
-		if cmd.Scene == 0 {
-			return map[string]any{"on": false}, nil
-		}
-		return map[string]any{"on": true}, nil
 	}
 
 	return nil, nil
+}
+
+// CallScene implements bridge.SceneCaller: a digitalSTROM scene number maps
+// directly onto a WLED preset index (WLED's "ps" field) — scene 0
+// conventionally means off, matching every other output kind's convention.
+func (p *Plugin) CallScene(ctx context.Context, m bridge.Mapping, scene int) error {
+	p.mu.RLock()
+	sub, ok := p.subscribed[m.DSUID]
+	p.mu.RUnlock()
+
+	if !ok || sub.client == nil {
+		return fmt.Errorf("wled: device %q not connected", m.RemoteEntityID)
+	}
+
+	if scene == 0 {
+		return sub.client.postState(ctx, map[string]any{"on": false})
+	}
+	return sub.client.postState(ctx, map[string]any{"on": true, "ps": scene})
 }

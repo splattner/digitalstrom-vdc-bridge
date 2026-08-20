@@ -18,7 +18,7 @@ func newTestPluginWithClient(t *testing.T, ts *httptest.Server, comp component) 
 	addr := strings.TrimPrefix(ts.URL, "http://")
 	devID := "shellytest-aabbcc"
 	m := bridge.Mapping{PluginID: "shelly1", RemoteEntityID: entityID(devID, comp), DSUID: "D1", Kind: "light", Name: "Relay"}
-	sub := &deviceSub{mapping: m, deviceID: devID, component: comp, activated: true}
+	sub := &deviceSub{mapping: m, deviceID: devID, identity: comp, activated: true}
 	c := newDeviceClient(addr, devID, "vdcgo-shelly1")
 	p := &Plugin{
 		id:         "shelly1",

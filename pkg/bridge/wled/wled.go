@@ -50,6 +50,15 @@ type Plugin struct {
 	id      string
 	host    bridge.Host
 	scanner *scanner
+	// ctx/cancel are derived from the ctx passed to Init, once, and never
+	// touched again after that — safe to read from any method without a
+	// lock, since the Registry only ever calls Subscribe/etc. after Init has
+	// returned. Used to scope every background goroutine this plugin starts
+	// (the scanner and every per-device client) to this plugin instance
+	// specifically, rather than the Registry's shared, only-cancelled-at
+	// process-shutdown runtime ctx — so Close() can actually stop them.
+	ctx    context.Context
+	cancel context.CancelFunc
 
 	mu sync.RWMutex
 	// subscribed maps DSUID → subscription (active forward)
@@ -81,15 +90,18 @@ func (p *Plugin) Stats() bridge.PluginStats {
 // Init starts the mDNS scanner and wires callbacks.
 func (p *Plugin) Init(ctx context.Context, _ map[string]any, host bridge.Host) error {
 	p.host = host
+	runCtx, cancel := context.WithCancel(ctx)
+	p.ctx = runCtx
+	p.cancel = cancel
 	p.scanner = newScanner(
-		func(dev discoveredDevice) { p.onDeviceFound(ctx, dev) },
+		func(dev discoveredDevice) { p.onDeviceFound(runCtx, dev) },
 		nil,
 		func(err error) {
 			host.Log(bridge.LevelWarn, bridge.CodeEntityError, "WLED mDNS browse error",
 				map[string]any{"error": err.Error()})
 		},
 	)
-	go p.scanner.Run(ctx)
+	go p.scanner.Run(runCtx)
 	logging.Info("wled_plugin_started", logging.Fields{"id": p.id})
 	return nil
 }
@@ -114,7 +126,7 @@ func (p *Plugin) Discover(_ context.Context) ([]bridge.RemoteEntity, error) {
 }
 
 // Subscribe registers a mapping and starts the per-device WS client.
-func (p *Plugin) Subscribe(ctx context.Context, m bridge.Mapping) error {
+func (p *Plugin) Subscribe(_ context.Context, m bridge.Mapping) error {
 	mac := m.RemoteEntityID
 
 	dev, ok := p.scanner.Get(mac)
@@ -130,7 +142,10 @@ func (p *Plugin) Subscribe(ctx context.Context, m bridge.Mapping) error {
 			map[string]any{"dsuid": m.DSUID, "mac": mac})
 		return nil
 	}
-	return p.startDeviceClient(ctx, m, dev)
+	// Use the plugin's own lifetime ctx (from Init), not the caller's — the
+	// deviceClient's background goroutines must outlive this single
+	// Subscribe call and stop only when this plugin instance does.
+	return p.startDeviceClient(p.ctx, m, dev)
 }
 
 // Unsubscribe stops the per-device WS client and removes the mapping.
@@ -168,6 +183,12 @@ func (p *Plugin) Apply(ctx context.Context, m bridge.Mapping, cmd bridge.Command
 
 // Close shuts down all per-device clients (scanner stops when ctx is cancelled).
 func (p *Plugin) Close() error {
+	// Stops the mDNS scanner goroutine (and, transitively, anything started
+	// with p.ctx that hasn't already been stopped below).
+	if p.cancel != nil {
+		p.cancel()
+	}
+
 	p.mu.Lock()
 	subs := make([]subscription, 0, len(p.subscribed))
 	for _, sub := range p.subscribed {

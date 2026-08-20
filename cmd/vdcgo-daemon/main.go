@@ -25,7 +25,16 @@ func main() {
 	model := flag.String("model", "vdcgo", "vDC model identifier")
 	dataDir := flag.String("datadir", "", "directory for persistent data (scenes, device config); empty disables persistence")
 	httpListen := flag.String("http-listen", envOrDefault("VDCGO_HTTP_LISTEN", ""), "address for the REST/WebSocket HTTP API, e.g. :8090 (empty = disabled)")
+	authUser := flag.String("auth-user", envOrDefault("VDCGO_AUTH_USER", ""), "username for optional HTTP Basic Auth on the REST/WebSocket API (only takes effect if VDCGO_AUTH_PASSWORD is set; defaults to \"admin\" if left empty). For standalone deployments only — the Home Assistant add-on is already gated by ingress and does not need this.")
 	flag.Parse()
+
+	// The password is env-only (no --auth-password flag) so it never shows up
+	// in `ps`/process listings.
+	authPassword := os.Getenv("VDCGO_AUTH_PASSWORD")
+	resolvedAuthUser := *authUser
+	if authPassword != "" && resolvedAuthUser == "" {
+		resolvedAuthUser = "admin"
+	}
 
 	svc, err := vdcgo.NewService(vdcgo.Config{
 		NonLocal:     *nonLocal,
@@ -40,6 +49,8 @@ func main() {
 		NoAuto:       *noAuto,
 		DataDir:      *dataDir,
 		HTTPListen:   *httpListen,
+		AuthUsername: resolvedAuthUser,
+		AuthPassword: authPassword,
 	})
 	if err != nil {
 		logging.Error("daemon_config_error", logging.Fields{"error": err})
@@ -54,6 +65,7 @@ func main() {
 		"dns_discovery": !*noDiscovery,
 		"dsuid":         svc.Config().DSUID,
 		"http_listen":   *httpListen,
+		"http_auth":     authPassword != "",
 	})
 	if err := svc.Run(ctx); err != nil {
 		logging.Error("daemon_stopped_with_error", logging.Fields{"error": err})

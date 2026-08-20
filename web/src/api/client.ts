@@ -149,6 +149,7 @@ export interface SettingsInfo {
   nonLocal: boolean
   noAuto: boolean
   dataDir: string
+  authEnabled: boolean
   buildVersion: string
   goVersion: string
   os: string

@@ -19,6 +19,7 @@ import {
 } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { ConfigForm } from '@/components/ConfigForm'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { defaultsForSchema, stripEmptyPasswords } from '@/lib/configSchema'
 import { useToasts } from '@/lib/toasts'
 
@@ -88,6 +89,11 @@ type Modal =
   | { kind: 'closed' }
   | { kind: 'add' }
   | { kind: 'edit'; pluginId: string }
+
+type ConfirmAction =
+  | { kind: 'none' }
+  | { kind: 'delete'; plugin: Plugin }
+  | { kind: 'disable'; plugin: Plugin }
 
 export default function PluginsPage() {
   const qc = useQueryClient()
@@ -190,6 +196,7 @@ export default function PluginsPage() {
   const connectedPct = totalPlugins === 0 ? 0 : Math.round((connectedPlugins / totalPlugins) * 100)
 
   const [modal, setModal] = useState<Modal>({ kind: 'closed' })
+  const [confirmAction, setConfirmAction] = useState<ConfirmAction>({ kind: 'none' })
 
   const deleteMut = useMutation({
     mutationFn: (id: string) => api.deletePlugin(id),
@@ -232,12 +239,12 @@ export default function PluginsPage() {
       pushToast(`Discovery failed: ${e instanceof Error ? e.message : String(e)}`, 'error'),
   })
 
-  const onDelete = (p: Plugin) => {
-    if (!confirm(`Delete plugin "${p.id}"? Bridges using it will also be removed.`)) return
-    deleteMut.mutate(p.id)
-  }
+  const onDelete = (p: Plugin) => setConfirmAction({ kind: 'delete', plugin: p })
   const onToggleEnabled = (p: Plugin) => {
-    if (p.enabled && !confirm(`Disable plugin "${p.id}"? Its bridges will stop receiving updates until re-enabled.`)) return
+    if (p.enabled) {
+      setConfirmAction({ kind: 'disable', plugin: p })
+      return
+    }
     enableMut.mutate(p)
   }
 
@@ -464,6 +471,33 @@ export default function PluginsPage() {
           onSaved={() => {
             setModal({ kind: 'closed' })
             void qc.invalidateQueries({ queryKey: ['plugins'] })
+          }}
+        />
+      )}
+
+      {confirmAction.kind === 'delete' && (
+        <ConfirmDialog
+          title={`Delete plugin "${confirmAction.plugin.id}"?`}
+          description="Bridges using it will also be removed."
+          confirmLabel="Delete"
+          tone="destructive"
+          onCancel={() => setConfirmAction({ kind: 'none' })}
+          onConfirm={() => {
+            deleteMut.mutate(confirmAction.plugin.id)
+            setConfirmAction({ kind: 'none' })
+          }}
+        />
+      )}
+      {confirmAction.kind === 'disable' && (
+        <ConfirmDialog
+          title={`Disable plugin "${confirmAction.plugin.id}"?`}
+          description="Its bridges will stop receiving updates until re-enabled."
+          confirmLabel="Disable"
+          tone="destructive"
+          onCancel={() => setConfirmAction({ kind: 'none' })}
+          onConfirm={() => {
+            enableMut.mutate(confirmAction.plugin)
+            setConfirmAction({ kind: 'none' })
           }}
         />
       )}

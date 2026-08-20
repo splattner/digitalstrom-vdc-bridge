@@ -56,6 +56,23 @@ services:
 
 > With `network_mode: host` the container shares the host's network stack, which means the mDNS announcements are visible to the rest of the LAN and the digitalSTROM Server can discover the bridge without any manual configuration.
 
+### Securing the web UI (standalone only)
+
+With `--network host` the web UI and REST/WebSocket API are reachable by anything on the LAN, with no login by default. Set `VDCGO_AUTH_PASSWORD` (and optionally `VDCGO_AUTH_USER`, which defaults to `admin`) to require HTTP Basic Auth:
+
+```bash
+docker run -d \
+  --name digitalstrom-vdc-bridge \
+  --network host \
+  -v ./data:/data \
+  -e VDCGO_AUTH_PASSWORD=change-me \
+  ghcr.io/splattner/digitalstrom-vdc-bridge:latest
+```
+
+`/api/health` stays open (for container health checks); everything else, including the web UI itself, requires the password. This only protects against casual LAN access — credentials travel base64-encoded, not encrypted, so put this behind a TLS-terminating reverse proxy if it's ever reachable from the open internet.
+
+Don't set this when running the Home Assistant add-on below — ingress already gates access via your HA session, and layering Basic Auth on top of the ingress iframe just breaks the panel.
+
 ## Home Assistant Add-on
 
 Add this repository to the Home Assistant add-on store:

@@ -52,6 +52,12 @@ type Config struct {
 	// PluginConfigs is the list of bridge plugin instances to start.
 	// Each entry describes a plugin type and its configuration.
 	PluginConfigs []bridge.PluginConfig
+	// AuthUsername/AuthPassword, when AuthPassword is non-empty, require HTTP
+	// Basic Auth on the HTTP API (see httpapi.Config for details). Intended
+	// for standalone deployments; leave empty under the Home Assistant
+	// add-on, which is already gated by ingress.
+	AuthUsername string
+	AuthPassword string
 }
 
 // Service runs the bridge and vDC API host.
@@ -246,23 +252,25 @@ func NewService(cfg Config) (*Service, error) {
 
 	if cfg.HTTPListen != "" {
 		svc.httpServer = httpapi.New(httpapi.Config{
-			Listen:      cfg.HTTPListen,
-			DSUID:       cfg.DSUID,
-			Description: cfg.Description,
-			Vendor:      cfg.Vendor,
-			Model:       cfg.Model,
-			State:       state,
-			Config:      configStore,
-			Scenes:      scenes,
+			Listen:         cfg.HTTPListen,
+			DSUID:          cfg.DSUID,
+			Description:    cfg.Description,
+			Vendor:         cfg.Vendor,
+			Model:          cfg.Model,
+			State:          state,
+			Config:         configStore,
+			Scenes:         scenes,
 			Bridges:        bridgeRegistry,
 			EventBuffer:    eventBuf,
 			ActivityBuffer: activityBuf,
-			VdcAPIPort:  cfg.VdcAPIPort,
-			EnableDNSSD: cfg.EnableDNSSD,
-			NonLocal:    cfg.NonLocal,
-			NoAuto:      cfg.NoAuto,
-			DataDir:     cfg.DataDir,
-			Version:     Version,
+			VdcAPIPort:     cfg.VdcAPIPort,
+			EnableDNSSD:    cfg.EnableDNSSD,
+			NonLocal:       cfg.NonLocal,
+			NoAuto:         cfg.NoAuto,
+			DataDir:        cfg.DataDir,
+			Version:        Version,
+			AuthUsername:   cfg.AuthUsername,
+			AuthPassword:   cfg.AuthPassword,
 			SessionInfo: func() httpapi.DSSSessionInfo {
 				if svc.pbufServer == nil {
 					return httpapi.DSSSessionInfo{}

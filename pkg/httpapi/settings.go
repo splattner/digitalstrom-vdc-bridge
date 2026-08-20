@@ -33,6 +33,7 @@ type SettingsInfo struct {
 	NonLocal     bool   `json:"nonLocal"`
 	NoAuto       bool   `json:"noAuto"`
 	DataDir      string `json:"dataDir"`
+	AuthEnabled  bool   `json:"authEnabled"`
 	BuildVersion string `json:"buildVersion"`
 	GoVersion    string `json:"goVersion"`
 	OS           string `json:"os"`
@@ -69,6 +70,7 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		NonLocal:        s.cfg.NonLocal,
 		NoAuto:          s.cfg.NoAuto,
 		DataDir:         s.cfg.DataDir,
+		AuthEnabled:     s.cfg.AuthPassword != "",
 		BuildVersion:    version,
 		GoVersion:       runtime.Version(),
 		OS:              runtime.GOOS,

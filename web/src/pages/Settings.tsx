@@ -240,6 +240,9 @@ function RuntimeCard({ info }: { info: SettingsInfo }) {
       <Row label="Non-local">
         <BoolBadge value={info.nonLocal} />
       </Row>
+      <Row label="HTTP Basic Auth">
+        <BoolBadge value={info.authEnabled} />
+      </Row>
       <Row label="No-auto">
         <BoolBadge value={info.noAuto} />
       </Row>

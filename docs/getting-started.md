@@ -84,6 +84,12 @@ docker compose up -d
 
 ---
 
+## Securing the web UI
+
+The Docker quick-start and Compose examples above expose the web UI and REST/WebSocket API with no login. If the bridge's port is reachable beyond a trusted LAN, set `VDCGO_AUTH_PASSWORD` (and optionally `VDCGO_AUTH_USER`, default `admin`) as an environment variable to require HTTP Basic Auth on every request except `/api/health`. This isn't needed for the Home Assistant add-on below — ingress already gates access via your HA session.
+
+---
+
 ## Home Assistant Add-on
 
 If you run Home Assistant OS (or Home Assistant Supervised), the easiest path is the built-in add-on.

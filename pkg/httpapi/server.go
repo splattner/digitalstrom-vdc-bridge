@@ -55,6 +55,13 @@ type Config struct {
 	NoAuto      bool
 	DataDir     string
 	Version     string
+
+	// AuthUsername/AuthPassword, when AuthPassword is non-empty, require HTTP
+	// Basic Auth on every request except /api/health. Intended for standalone
+	// deployments that expose this API directly; leave empty when running
+	// behind an authenticating proxy (e.g. Home Assistant ingress).
+	AuthUsername string
+	AuthPassword string
 }
 
 // DSSSessionInfo carries runtime information about the active vDSM connection.
@@ -237,6 +244,9 @@ func (s *Server) buildRouter() chi.Router {
 	r := chi.NewRouter()
 	r.Use(middleware.Recoverer)
 	r.Use(corsMiddleware)
+	if s.cfg.AuthPassword != "" {
+		r.Use(basicAuthMiddleware(s.cfg.AuthUsername, s.cfg.AuthPassword))
+	}
 
 	r.Get("/api/health", s.handleHealth)
 	r.Get("/api/dss", s.handleDSS)

@@ -94,6 +94,62 @@ func (c *Commander) SetChannelValue(uniqueID string, channelIndex int, value flo
 	return c.fallback.SetChannelValue(uniqueID, channelIndex, value)
 }
 
+// CallScene implements vdcapi.SceneCommander. It only does something for a
+// bridged device whose owning plugin implements SceneCaller (currently just
+// WLED, recalling one of its own presets) — any other case, including a
+// device that IS bridged but whose plugin has no native scene support,
+// returns an error so the caller (method_service.go's scene-call fallback)
+// falls through to its computed-brightness-level behavior instead.
+func (c *Commander) CallScene(uniqueID string, scene int) error {
+	if c == nil {
+		return fmt.Errorf("commander not configured")
+	}
+	if c.registry != nil {
+		if m, plugin, ok := c.lookupBridge(uniqueID); ok {
+			sc, ok := plugin.(SceneCaller)
+			if !ok {
+				return fmt.Errorf("plugin %q does not support native scene recall", m.PluginID)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
+			defer cancel()
+			if err := sc.CallScene(ctx, m, scene); err != nil {
+				logging.Warn("bridge_call_scene_error", logging.Fields{
+					"plugin_id": m.PluginID,
+					"dsuid":     m.DSUID,
+					"scene":     scene,
+					"error":     err.Error(),
+				})
+				c.registry.EmitPluginEvent(m.PluginID, LevelWarn, CodeApplyFailed,
+					"native scene recall failed", map[string]any{
+						"dsuid": m.DSUID,
+						"scene": scene,
+						"error": err.Error(),
+					})
+				return err
+			}
+			logging.Info("bridge_call_scene", logging.Fields{
+				"plugin_id": m.PluginID,
+				"dsuid":     m.DSUID,
+				"scene":     scene,
+			})
+			if c.activityBuffer != nil {
+				c.activityBuffer.Publish(DeviceActivity{
+					DSUID:    m.DSUID,
+					Source:   ActivitySourceVDSM,
+					PluginID: m.PluginID,
+					Type:     "scene",
+					Scene:    scene,
+				})
+			}
+			return nil
+		}
+	}
+	if sc, ok := c.fallback.(vdcapi.SceneCommander); ok {
+		return sc.CallScene(uniqueID, scene)
+	}
+	return fmt.Errorf("device with uniqueid %q does not support native scene recall", uniqueID)
+}
+
 // lookupBridge resolves a uniqueID (case-insensitive) to its mapping + plugin.
 func (c *Commander) lookupBridge(uniqueID string) (Mapping, Plugin, bool) {
 	store := c.registry.Mappings()

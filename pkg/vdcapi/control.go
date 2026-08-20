@@ -158,6 +158,16 @@ type Commander interface {
 	SetChannelValue(uniqueID string, channelIndex int, value float64) error
 }
 
+// SceneCommander is an optional Commander capability for devices that can
+// recall a native remote scene/preset directly, instead of a computed
+// channel-value fallback. Tried first by the scene-call fallback path in
+// method_service.go; any error (including "not supported by this device")
+// falls through to the existing brightness-level behavior, so implementing
+// this is purely additive.
+type SceneCommander interface {
+	CallScene(uniqueID string, scene int) error
+}
+
 // applyColorChannelValue dispatches a channel write via the generic
 // SetChannelValue interface method.
 func applyColorChannelValue(commander Commander, uniqueID string, channelIndex int, value float64) error {

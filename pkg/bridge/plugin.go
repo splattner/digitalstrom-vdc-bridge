@@ -75,6 +75,19 @@ type PluginConfig struct {
 // The id parameter is the instance identifier from PluginConfig.ID.
 type Factory func(id string) Plugin
 
+// SceneCaller is an optional plugin capability for native remote scene/preset
+// recall — e.g. switching a WLED strip to one of its own saved presets.
+// Command routing (pkg/vdcapi/method_service.go) tries this first for a
+// digitalSTROM scene call that has no explicitly saved per-channel scene for
+// the addressed device; an explicit saved scene always wins, since it's a
+// precise user intent a generic preset recall might not reproduce. Plugins
+// that don't implement it (the default) get the existing computed-brightness
+// fallback, unchanged. scene == 0 conventionally means "off" — implementers
+// should turn the device off rather than trying to recall a "preset 0".
+type SceneCaller interface {
+	CallScene(ctx context.Context, m Mapping, scene int) error
+}
+
 // Suggester is an optional plugin capability: plugins implementing this
 // interface advertise dynamic option lists for "select" / "multiselect"
 // schema fields whose OptionsSource is "plugin". The HTTP API exposes them

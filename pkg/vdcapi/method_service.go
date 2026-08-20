@@ -642,15 +642,40 @@ func (m methodService) applyStaticSceneAction(targets []string, all bool, scene 
 	action := mapSceneAction(scene)
 	switch action.kind {
 	case sceneActionSetLevel:
-		m.applyLevelToNotificationTargets(targets, all, action.level)
+		m.applySceneToTargets(targets, all, scene, action.level)
 	case sceneActionDimUp:
-		m.applyLevelToNotificationTargets(targets, all, 100)
+		m.applySceneToTargets(targets, all, scene, 100)
 	case sceneActionDimDown:
-		m.applyLevelToNotificationTargets(targets, all, 0)
+		m.applySceneToTargets(targets, all, scene, 0)
 	case sceneActionStop:
 		return
 	default:
 		logging.Debug("notification_call_scene_ignored", logging.Fields{"scene": scene})
+	}
+}
+
+// applySceneToTargets applies a scene call to every resolved target device,
+// trying a native scene/preset recall first (SceneCommander — currently only
+// WLED implements the plugin-level capability this routes to) and falling
+// back to the computed brightness level per-device on any error, including
+// "not supported". This only runs when there's no explicitly saved
+// per-channel scene for the device (see handleCallSceneNotification) — an
+// explicit saved scene always takes priority over a generic preset recall.
+func (m methodService) applySceneToTargets(targets []string, all bool, scene int, fallbackLevel float64) {
+	if m.commander == nil {
+		return
+	}
+	sc, hasNative := m.commander.(SceneCommander)
+	level := clampLevel(fallbackLevel)
+	for _, d := range m.resolveNotificationTargets(targets, all) {
+		if hasNative {
+			if err := sc.CallScene(d.UniqueID, scene); err == nil {
+				continue
+			}
+		}
+		if err := m.commander.SetLightLevel(d.UniqueID, level); err != nil {
+			logging.Warn("notification_control_error", logging.Fields{"unique_id": d.UniqueID, "error": err})
+		}
 	}
 }
 

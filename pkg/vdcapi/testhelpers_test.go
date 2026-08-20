@@ -67,6 +67,41 @@ func (m *mockCommander) snapshot() (called bool, uniqueID string, value float64)
 	return m.called, m.uniqueID, m.value
 }
 
+// mockSceneCommander wraps mockCommander and adds a scriptable CallScene, so
+// tests can exercise the native-scene-first path in applySceneToTargets
+// without every existing mockCommander-based test picking it up implicitly.
+type mockSceneCommander struct {
+	*mockCommander
+
+	mu         sync.Mutex
+	sceneCalls []mockSceneCall
+	sceneErr   error // returned by CallScene; nil = success
+}
+
+type mockSceneCall struct {
+	uniqueID string
+	scene    int
+}
+
+func newMockSceneCommander() *mockSceneCommander {
+	return &mockSceneCommander{mockCommander: &mockCommander{}}
+}
+
+func (m *mockSceneCommander) CallScene(uniqueID string, scene int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.sceneCalls = append(m.sceneCalls, mockSceneCall{uniqueID, scene})
+	return m.sceneErr
+}
+
+func (m *mockSceneCommander) sceneCallSnapshot() []mockSceneCall {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]mockSceneCall, len(m.sceneCalls))
+	copy(out, m.sceneCalls)
+	return out
+}
+
 // waitForCommanderCallMatching polls mc via snapshot() until it has been
 // called with the given uniqueID and a value satisfying want, or the timeout
 // elapses. Needed for dimChannel, whose ramp applies asynchronously from a

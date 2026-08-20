@@ -258,12 +258,6 @@ func (p *Plugin) Apply(ctx context.Context, m bridge.Mapping, cmd bridge.Command
 
 func (p *Plugin) applyLight(ctx context.Context, m bridge.Mapping, cmd bridge.Command, target map[string]any) error {
 	switch cmd.Type {
-	case "setActive":
-		service := "turn_on"
-		if !cmd.Active {
-			service = "turn_off"
-		}
-		return p.client.callService(ctx, "light", service, target, nil)
 	case "setChannel":
 		// Channels other than 0 are color attributes for colorlights and
 		// have no off/on semantics — turn the light on while applying them.
@@ -312,12 +306,6 @@ func (p *Plugin) applyLight(ctx context.Context, m bridge.Mapping, cmd bridge.Co
 			return nil
 		}
 		return nil
-	case "callScene":
-		// Minimal scene mapping: scene 0 = off, anything else = on at 100%.
-		if cmd.Scene == 0 {
-			return p.client.callService(ctx, "light", "turn_off", target, nil)
-		}
-		return p.client.callService(ctx, "light", "turn_on", target, nil)
 	}
 	return nil
 }

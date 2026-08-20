@@ -4,7 +4,7 @@ import {
   Plus, Settings2, Trash2, X, FlaskConical, ScrollText,
   Home, Wifi, Cpu, Lightbulb, Antenna, Box,
   Boxes, Link2, Monitor, AlertTriangle,
-  RefreshCw, Radar, Power, PowerOff, Pause, Play, Terminal,
+  RefreshCw, Radar, Power, PowerOff, Pause, Play, Terminal, Zap,
 } from 'lucide-react'
 import {
   api,
@@ -39,6 +39,7 @@ const PLUGIN_VISUAL: Record<string, PluginVisual> = {
   wled:          { Icon: Lightbulb, tone: 'bg-fuchsia-500/10 text-fuchsia-600 dark:text-fuchsia-400', dot: '#d946ef' },
   zigbee2mqtt:   { Icon: Antenna,   tone: 'bg-amber-500/10 text-amber-600 dark:text-amber-400',      dot: '#f59e0b' },
   externaldevice:{ Icon: Terminal,  tone: 'bg-teal-500/10 text-teal-600 dark:text-teal-400',         dot: '#14b8a6' },
+  shelly:        { Icon: Zap,       tone: 'bg-blue-500/10 text-blue-600 dark:text-blue-400',         dot: '#3b82f6' },
 }
 
 const DEFAULT_VISUAL: PluginVisual = {

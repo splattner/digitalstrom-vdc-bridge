@@ -13,6 +13,7 @@ import (
 	"github.com/splattner/vdcgo/pkg/bridge/externaldevice"
 	"github.com/splattner/vdcgo/pkg/bridge/homeassistant"
 	mqttplugin "github.com/splattner/vdcgo/pkg/bridge/mqtt"
+	"github.com/splattner/vdcgo/pkg/bridge/shelly"
 	"github.com/splattner/vdcgo/pkg/bridge/tasmota"
 	"github.com/splattner/vdcgo/pkg/bridge/wled"
 	"github.com/splattner/vdcgo/pkg/bridge/zigbee2mqtt"
@@ -201,6 +202,7 @@ func NewService(cfg Config) (*Service, error) {
 	bridgeRegistry.Register(externaldevice.PluginType, externaldevice.RegisterEntry())
 	bridgeRegistry.Register(mqttplugin.PluginType, mqttplugin.RegisterEntry())
 	bridgeRegistry.Register(homeassistant.PluginType, homeassistant.RegisterEntry())
+	bridgeRegistry.Register(shelly.PluginType, shelly.RegisterEntry())
 	bridgeRegistry.Register(tasmota.PluginType, tasmota.RegisterEntry())
 	bridgeRegistry.Register(wled.PluginType, wled.RegisterEntry())
 	bridgeRegistry.Register(zigbee2mqtt.PluginType, zigbee2mqtt.RegisterEntry())

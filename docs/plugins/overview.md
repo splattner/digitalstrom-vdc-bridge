@@ -9,6 +9,7 @@ For the specific configuration of each plugin type, see the individual pages:
 - [Zigbee2MQTT](zigbee2mqtt.md)
 - [Tasmota](tasmota.md)
 - [WLED](wled.md)
+- [Shelly](shelly.md)
 - [External Device API](externaldevice.md)
 
 ---

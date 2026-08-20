@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.15](https://github.com/splattner/digitalstrom-vdc-bridge/compare/v0.1.14...v0.1.15) (2026-08-20)
+
+
+### Features
+
+* **web:** replace browser confirm() with in-app dialog on Plugins page ([#197](https://github.com/splattner/digitalstrom-vdc-bridge/issues/197)) ([b68e362](https://github.com/splattner/digitalstrom-vdc-bridge/commit/b68e3620157441c7ea5fbcf04e413a9f123eb221))
+
 ## [0.1.14](https://github.com/splattner/digitalstrom-vdc-bridge/compare/v0.1.13...v0.1.14) (2026-08-20)
 
 

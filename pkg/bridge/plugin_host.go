@@ -15,6 +15,15 @@ type pluginHost struct {
 	pluginID          string
 	getSink           func() EventSink
 	getActivityBuffer func() *ActivityBuffer
+	notifyDiscovery   func(pluginID string)
+}
+
+// NotifyDiscoveryChanged overrides the base to tell the Registry which
+// plugin's discoverable set may have changed.
+func (h *pluginHost) NotifyDiscoveryChanged() {
+	if h.notifyDiscovery != nil {
+		h.notifyDiscovery(h.pluginID)
+	}
 }
 
 // Log emits a PluginEvent through the Registry's EventSink (if one is set).

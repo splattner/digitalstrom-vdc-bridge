@@ -416,9 +416,11 @@ func (p *Plugin) onDevices(_ context.Context, payload []byte) {
 		}
 	}
 	// Drop devices that disappeared from the list.
+	removed := 0
 	for ieee := range p.devices {
 		if _, ok := seen[ieee]; !ok {
 			delete(p.devices, ieee)
+			removed++
 		}
 	}
 	p.mu.Unlock()
@@ -429,6 +431,9 @@ func (p *Plugin) onDevices(_ context.Context, payload []byte) {
 		})
 		p.host.Log(bridge.LevelInfo, bridge.CodeEntityAdded, "discovered devices updated",
 			map[string]any{"added": added, "total": len(seen)})
+	}
+	if added > 0 || removed > 0 {
+		p.host.NotifyDiscoveryChanged()
 	}
 	for _, sub := range pending {
 		dev := p.devices[sub.ieee]
@@ -471,9 +476,11 @@ func (p *Plugin) onGroups(_ context.Context, payload []byte) {
 		}
 	}
 	// Drop groups that disappeared from the list.
+	removed := 0
 	for eid := range p.groups {
 		if _, ok := seen[eid]; !ok {
 			delete(p.groups, eid)
+			removed++
 		}
 	}
 	p.mu.Unlock()
@@ -484,6 +491,9 @@ func (p *Plugin) onGroups(_ context.Context, payload []byte) {
 		})
 		p.host.Log(bridge.LevelInfo, bridge.CodeEntityAdded, "discovered groups updated",
 			map[string]any{"added": added, "total": len(seen)})
+	}
+	if added > 0 || removed > 0 {
+		p.host.NotifyDiscoveryChanged()
 	}
 	for _, sub := range pending {
 		p.mu.Lock()

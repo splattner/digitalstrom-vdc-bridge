@@ -72,6 +72,14 @@ type Host interface {
 	// forwarded to WebSocket subscribers / REST snapshots.
 	// Use the Code constants defined in plugin_event.go for well-known events.
 	Log(level LogLevel, code, message string, fields map[string]any)
+	// NotifyDiscoveryChanged tells the Registry that this plugin's set of
+	// discoverable entities may have changed — a new device appeared, one
+	// disappeared, or its Discover()-visible attributes changed. The
+	// Registry forwards this as a WebSocket event so the web UI's Discovered
+	// page can refresh immediately instead of waiting for its poll interval.
+	// Cheap to call generously — the Registry does not re-run Discover()
+	// itself, it only tells clients theirs may be stale.
+	NotifyDiscoveryChanged()
 }
 
 // SensorDescriptor is re-exported from the runtime package for plugin use.
@@ -104,6 +112,11 @@ func (h *hostImpl) MQTT() *mqtt.Manager { return h.mqtt }
 // Log is a no-op on the base hostImpl. Plugins receive a pluginHost wrapper
 // (created by the Registry) that overrides this with real event emission.
 func (h *hostImpl) Log(_ LogLevel, _, _ string, _ map[string]any) {}
+
+// NotifyDiscoveryChanged is a no-op on the base hostImpl. Plugins receive a
+// pluginHost wrapper (created by the Registry) that overrides this to
+// broadcast a WebSocket event scoped to the calling plugin's id.
+func (h *hostImpl) NotifyDiscoveryChanged() {}
 
 func (h *hostImpl) DeriveDSUID(pluginID, remoteEntityID string) string {
 	return vdcapi.BridgeDSUID(pluginID, remoteEntityID)

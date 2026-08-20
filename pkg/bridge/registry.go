@@ -126,6 +126,14 @@ func (r *Registry) emit(t string, data map[string]any) {
 	}
 }
 
+// notifyDiscoveryChanged emits a "discoveryChanged" event for pluginID via
+// the registered Notifier (see SetNotifier) — the HTTP API forwards it to
+// WebSocket clients so the web UI's Discovered page can refresh that
+// plugin's list immediately instead of waiting for its poll interval.
+func (r *Registry) notifyDiscoveryChanged(pluginID string) {
+	r.emit("discoveryChanged", map[string]any{"pluginId": pluginID})
+}
+
 // NewRegistry creates an empty Registry backed by the given host and mapping store.
 func NewRegistry(host Host, mappings *MappingStore) *Registry {
 	return &Registry{
@@ -285,7 +293,7 @@ func (r *Registry) startPlugin(ctx context.Context, pc PluginConfig) error {
 	p := entry.Factory(pc.ID)
 	// Wrap the shared host with a per-plugin facade that auto-tags Log events
 	// and records device activity to the ActivityBuffer.
-	ph := &pluginHost{Host: r.host, pluginID: pc.ID, getSink: r.getSink, getActivityBuffer: r.getActivityBuffer}
+	ph := &pluginHost{Host: r.host, pluginID: pc.ID, getSink: r.getSink, getActivityBuffer: r.getActivityBuffer, notifyDiscovery: r.notifyDiscoveryChanged}
 	if err := p.Init(ctx, resolvedCfg, ph); err != nil {
 		r.sinkEmit(pc.ID, LevelError, CodeConnectFailed, "plugin init failed", map[string]any{"error": err.Error(), "type": pc.Type})
 		r.recordStartFailure(pc.ID)

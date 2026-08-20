@@ -210,6 +210,7 @@ func (p *Plugin) Close() error {
 func (p *Plugin) onDeviceFound(ctx context.Context, dev discoveredDevice) {
 	p.host.Log(bridge.LevelInfo, bridge.CodeEntityAdded, "WLED device found via mDNS",
 		map[string]any{"mac": dev.MAC, "name": dev.Name, "addr": dev.Addr, "ver": dev.Ver})
+	p.host.NotifyDiscoveryChanged()
 
 	p.mu.Lock()
 	dsuid, hasSub := p.byMAC[dev.MAC]

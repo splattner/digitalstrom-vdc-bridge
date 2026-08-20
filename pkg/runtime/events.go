@@ -64,6 +64,10 @@ type Event struct {
 	Action                string
 	Active                bool
 	Connection            string
+	// Dimmable, populated for EventInit, distinguishes a real dimmer from a
+	// plain relay/switch light (nil = unspecified, treated as dimmable — the
+	// existing behavior for every caller that doesn't set it).
+	Dimmable *bool
 	SensorDescriptor      *SensorDescriptor      // populated for EventSensorDescriptor
 	BinaryInputDescriptor *BinaryInputDescriptor // populated for EventBinaryInputDescriptor
 	ButtonDescriptor      *ButtonDescriptor      // populated for EventButtonDescriptor

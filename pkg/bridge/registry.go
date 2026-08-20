@@ -6,9 +6,26 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/splattner/vdcgo/pkg/logging"
 )
+
+// supervisorInterval and supervisorBackoffMax govern the background
+// supervisor loop that retries a plugin whose Init failed (e.g. Init failed
+// at daemon startup, or a manual RestartPlugin still failed). Package vars,
+// not constants, so tests can override them for fast, deterministic runs —
+// same pattern as pkg/vdcapi's dimRampTickInterval.
+var (
+	supervisorInterval  = 30 * time.Second
+	supervisorBackoffMax = 5 * time.Minute
+)
+
+// retryState tracks a single plugin's automatic-retry backoff.
+type retryState struct {
+	nextAt time.Time
+	delay  time.Duration
+}
 
 // Notifier is invoked by the Registry on lifecycle events that the rest of
 // the system (typically the HTTP API push pipeline) wants to observe.
@@ -32,6 +49,10 @@ type Registry struct {
 	persist        Persister
 	sink           EventSink
 	activityBuffer *ActivityBuffer
+	// retryBackoff tracks automatic-retry state for plugins whose most
+	// recent startPlugin attempt failed (see the supervisor loop started by
+	// Start). Cleared on the next successful startPlugin for that id.
+	retryBackoff map[string]retryState
 }
 
 // SetNotifier installs a notifier callback. Safe to call before or after Start.
@@ -108,11 +129,12 @@ func (r *Registry) emit(t string, data map[string]any) {
 // NewRegistry creates an empty Registry backed by the given host and mapping store.
 func NewRegistry(host Host, mappings *MappingStore) *Registry {
 	return &Registry{
-		factories: make(map[string]FactoryEntry),
-		instances: make(map[string]Plugin),
-		configs:   make(map[string]PluginConfig),
-		mappings:  mappings,
-		host:      host,
+		factories:    make(map[string]FactoryEntry),
+		instances:    make(map[string]Plugin),
+		configs:      make(map[string]PluginConfig),
+		mappings:     mappings,
+		host:         host,
+		retryBackoff: make(map[string]retryState),
 	}
 }
 
@@ -187,6 +209,8 @@ func (r *Registry) Start(ctx context.Context, configs []PluginConfig) error {
 	r.ctx = ctx
 	r.mu.Unlock()
 
+	r.startSupervisor(ctx)
+
 	for _, pc := range configs {
 		if pc.Disabled {
 			// Remember the config so it can be re-enabled later, but do not
@@ -239,11 +263,21 @@ func (r *Registry) Start(ctx context.Context, configs []PluginConfig) error {
 
 // startPlugin instantiates and initialises a single plugin.
 func (r *Registry) startPlugin(ctx context.Context, pc PluginConfig) error {
+	// Retain the config regardless of what happens below — a plugin that
+	// fails to start must still be visible/restartable (via the manual
+	// Restart API, or the supervisor loop) rather than vanishing until the
+	// whole daemon restarts.
+	r.mu.Lock()
+	r.configs[pc.ID] = pc
+	r.mu.Unlock()
+
 	r.mu.RLock()
 	entry, ok := r.factories[pc.Type]
 	r.mu.RUnlock()
 	if !ok {
-		return fmt.Errorf("unknown plugin type %q", pc.Type)
+		err := fmt.Errorf("unknown plugin type %q", pc.Type)
+		r.recordStartFailure(pc.ID)
+		return err
 	}
 
 	resolvedCfg := applyEnvOverlay(pc.ID, pc.Config)
@@ -254,17 +288,102 @@ func (r *Registry) startPlugin(ctx context.Context, pc PluginConfig) error {
 	ph := &pluginHost{Host: r.host, pluginID: pc.ID, getSink: r.getSink, getActivityBuffer: r.getActivityBuffer}
 	if err := p.Init(ctx, resolvedCfg, ph); err != nil {
 		r.sinkEmit(pc.ID, LevelError, CodeConnectFailed, "plugin init failed", map[string]any{"error": err.Error(), "type": pc.Type})
+		r.recordStartFailure(pc.ID)
 		return err
 	}
 
 	r.mu.Lock()
 	r.instances[pc.ID] = p
-	r.configs[pc.ID] = pc
+	delete(r.retryBackoff, pc.ID)
 	r.mu.Unlock()
 
 	logging.Info("bridge_plugin_started", logging.Fields{"id": pc.ID, "type": pc.Type})
 	r.sinkEmit(pc.ID, LevelInfo, CodePluginStarted, "plugin started", map[string]any{"type": pc.Type})
 	return nil
+}
+
+// recordStartFailure bumps id's automatic-retry backoff (doubling each
+// consecutive failure, capped at supervisorBackoffMax) so the supervisor
+// loop doesn't hammer a plugin that's failing every attempt.
+func (r *Registry) recordStartFailure(id string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delay := r.retryBackoff[id].delay * 2
+	if delay < supervisorInterval {
+		delay = supervisorInterval
+	}
+	if delay > supervisorBackoffMax {
+		delay = supervisorBackoffMax
+	}
+	r.retryBackoff[id] = retryState{nextAt: time.Now().Add(delay), delay: delay}
+}
+
+// startSupervisor runs superviseOnce every supervisorInterval until ctx is
+// cancelled. Started once from Start.
+func (r *Registry) startSupervisor(ctx context.Context) {
+	// Read the package var synchronously here, not inside the goroutine
+	// below: the goroutine's own first line running is not ordered against
+	// this function returning, so a test that mutates supervisorInterval
+	// right after calling Start could otherwise race with this goroutine's
+	// delayed startup reading it.
+	interval := supervisorInterval
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				r.superviseOnce(ctx)
+			}
+		}
+	}()
+}
+
+// superviseOnce retries startPlugin for every enabled config that has no
+// currently-running instance and whose backoff (if any) has elapsed — the
+// case a plugin whose Init failed (at daemon startup, or a manual restart
+// that still failed) would otherwise sit dead until a human intervenes
+// again. A plugin that starts successfully is resubscribed to its existing
+// bridge mappings, mirroring RestartPlugin's own resubscribe step.
+func (r *Registry) superviseOnce(ctx context.Context) {
+	now := time.Now()
+	r.mu.RLock()
+	var due []PluginConfig
+	for id, pc := range r.configs {
+		if pc.Disabled {
+			continue
+		}
+		if _, running := r.instances[id]; running {
+			continue
+		}
+		if st, ok := r.retryBackoff[id]; ok && now.Before(st.nextAt) {
+			continue
+		}
+		due = append(due, pc)
+	}
+	r.mu.RUnlock()
+
+	for _, pc := range due {
+		if err := r.startPlugin(ctx, pc); err != nil {
+			continue
+		}
+		r.sinkEmit(pc.ID, LevelInfo, CodePluginStarted,
+			"automatically restarted after a previous failure", map[string]any{"type": pc.Type})
+
+		r.mu.RLock()
+		fresh := r.instances[pc.ID]
+		r.mu.RUnlock()
+		if fresh == nil {
+			continue
+		}
+		for _, m := range r.mappings.ListForPlugin(pc.ID) {
+			if err := fresh.Subscribe(ctx, m); err != nil {
+				logging.Warn("bridge_resubscribe_error", logging.Fields{"dsuid": m.DSUID, "error": err.Error()})
+			}
+		}
+	}
 }
 
 // AddPlugin starts a brand-new plugin instance and persists the config list.
@@ -294,23 +413,32 @@ func (r *Registry) AddPlugin(ctx context.Context, pc PluginConfig) error {
 // RemovePlugin stops a plugin and removes any of its bridge mappings.
 func (r *Registry) RemovePlugin(ctx context.Context, id string) error {
 	r.mu.Lock()
-	p, ok := r.instances[id]
+	p, hasInstance := r.instances[id]
+	_, hasConfig := r.configs[id]
 	delete(r.instances, id)
 	delete(r.configs, id)
+	delete(r.retryBackoff, id)
 	r.mu.Unlock()
-	if !ok {
+	// A plugin can have a config but no running instance — e.g. its Init
+	// failed and it's still waiting on the supervisor's next retry. That
+	// must still be removable, not just one that's currently running.
+	if !hasInstance && !hasConfig {
 		return fmt.Errorf("plugin %q not found", id)
 	}
 
 	// Tear down all bridge mappings owned by this plugin.
 	for _, m := range r.mappings.ListForPlugin(id) {
-		_ = p.Unsubscribe(ctx, m.DSUID)
+		if hasInstance {
+			_ = p.Unsubscribe(ctx, m.DSUID)
+		}
 		_ = r.host.RemoveDevice(ctx, m.DSUID)
 		_, _ = r.mappings.Remove(m.DSUID)
 	}
 
-	if err := p.Close(); err != nil {
-		logging.Warn("bridge_plugin_close_error", logging.Fields{"id": id, "error": err.Error()})
+	if hasInstance {
+		if err := p.Close(); err != nil {
+			logging.Warn("bridge_plugin_close_error", logging.Fields{"id": id, "error": err.Error()})
+		}
 	}
 	r.persistConfigs()
 	r.emit("pluginRemoved", map[string]any{"id": id})
@@ -323,14 +451,20 @@ func (r *Registry) RemovePlugin(ctx context.Context, id string) error {
 // existing mappings.
 func (r *Registry) UpdatePlugin(ctx context.Context, pc PluginConfig) error {
 	r.mu.Lock()
-	old, ok := r.instances[pc.ID]
+	old, hasInstance := r.instances[pc.ID]
+	_, hasConfig := r.configs[pc.ID]
 	delete(r.instances, pc.ID)
 	r.mu.Unlock()
-	if !ok {
+	// A plugin can have a config but no running instance if its Init failed
+	// (e.g. a bad token) — updating its config to fix that must still work,
+	// not just editing a plugin that's currently running.
+	if !hasInstance && !hasConfig {
 		return fmt.Errorf("plugin %q not found", pc.ID)
 	}
-	if err := old.Close(); err != nil {
-		logging.Warn("bridge_plugin_close_error", logging.Fields{"id": pc.ID, "error": err.Error()})
+	if hasInstance {
+		if err := old.Close(); err != nil {
+			logging.Warn("bridge_plugin_close_error", logging.Fields{"id": pc.ID, "error": err.Error()})
+		}
 	}
 	// See AddPlugin: use the long-lived runtime ctx for the new instance.
 	runCtx := r.runtimeCtx(ctx)

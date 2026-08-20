@@ -38,6 +38,7 @@ type Plugin struct {
 	id     string
 	host   bridge.Host
 	client *wsClient
+	cancel context.CancelFunc
 
 	url   string
 	token string
@@ -155,7 +156,12 @@ func (p *Plugin) Init(ctx context.Context, cfg map[string]any, host bridge.Host)
 		host.Log(bridge.LevelWarn, code, message, fields)
 	}
 
-	go p.client.Run(ctx)
+	// Derive our own cancellable context rather than using ctx directly: ctx
+	// is the Registry's shared, process-lifetime runtime context, never
+	// cancelled per-plugin — Close() needs something it can actually stop.
+	runCtx, cancel := context.WithCancel(ctx)
+	p.cancel = cancel
+	go p.client.Run(runCtx)
 	logging.Info("ha_plugin_started", logging.Fields{"id": p.id, "url": url})
 	return nil
 }
@@ -310,9 +316,11 @@ func (p *Plugin) applyLight(ctx context.Context, m bridge.Mapping, cmd bridge.Co
 	return nil
 }
 
-// Close shuts the plugin down.
+// Close shuts the plugin down, stopping the WS client's background Run loop.
 func (p *Plugin) Close() error {
-	// The wsClient stops when the Init context is cancelled; nothing else to do.
+	if p.cancel != nil {
+		p.cancel()
+	}
 	return nil
 }
 

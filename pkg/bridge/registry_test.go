@@ -2,9 +2,12 @@ package bridge
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/splattner/vdcgo/pkg/services/mqtt"
 )
@@ -101,6 +104,11 @@ type fakePlugin struct {
 	discoverErr  error
 	subscribeErr error
 	applyErr     error
+	// failInitTimes, when > 0, makes Init fail this many times (returning
+	// errFakeInitTransient) before succeeding on every call after —
+	// independent of initErr, which means "always fail, unbounded". Used to
+	// drive the supervisor's retry-then-recover path deterministically.
+	failInitTimes int
 
 	initCalls       int
 	lastInitCfg     map[string]any
@@ -111,6 +119,8 @@ type fakePlugin struct {
 	closed          bool
 	status          string
 }
+
+var errFakeInitTransient = errors.New("fake transient init failure")
 
 func newFakePlugin(id string) *fakePlugin {
 	return &fakePlugin{id: id, subscribed: make(map[string]Mapping), status: "connected"}
@@ -124,7 +134,14 @@ func (p *fakePlugin) Init(_ context.Context, cfg map[string]any, host Host) erro
 	p.initCalls++
 	p.lastInitCfg = cfg
 	p.lastInitHost = host
-	return p.initErr
+	if p.initErr != nil {
+		return p.initErr
+	}
+	if p.failInitTimes > 0 {
+		p.failInitTimes--
+		return errFakeInitTransient
+	}
+	return nil
 }
 
 func (p *fakePlugin) Status() string { return p.status }
@@ -831,5 +848,146 @@ func TestRegistrySetActivityBufferUsedByPluginHost(t *testing.T) {
 	activity := ab.Snapshot("D1", 0, 0)
 	if len(activity) != 1 || activity[0].PluginID != "p1" || activity[0].Value == nil || *activity[0].Value != 42 {
 		t.Fatalf("expected UpdateChannel to publish a device activity entry tagged with plugin p1, got %+v", activity)
+	}
+}
+
+// ── Registry: config retained across a failed Init ──────────────────────────
+
+func TestRegistryConfigSurvivesInitFailureAndIsNotRunning(t *testing.T) {
+	host := newFakeHost()
+	reg := NewRegistry(host, NewMappingStore())
+	reg.RegisterFactory("bad", func(id string) Plugin {
+		p := newFakePlugin(id)
+		p.initErr = errors.New("boom")
+		return p
+	})
+
+	if err := reg.AddPlugin(context.Background(), PluginConfig{ID: "p1", Type: "bad"}); err == nil {
+		t.Fatal("expected AddPlugin to report the Init failure")
+	}
+	if _, ok := reg.Config("p1"); !ok {
+		t.Fatal("expected config to be retained despite the Init failure")
+	}
+	if _, ok := reg.Plugin("p1"); ok {
+		t.Fatal("expected no running instance for a plugin whose Init failed")
+	}
+}
+
+func TestRegistryRemovePluginWorksAfterInitFailure(t *testing.T) {
+	host := newFakeHost()
+	reg := NewRegistry(host, NewMappingStore())
+	reg.RegisterFactory("bad", func(id string) Plugin {
+		p := newFakePlugin(id)
+		p.initErr = errors.New("boom")
+		return p
+	})
+	_ = reg.AddPlugin(context.Background(), PluginConfig{ID: "p1", Type: "bad"})
+
+	if err := reg.RemovePlugin(context.Background(), "p1"); err != nil {
+		t.Fatalf("expected RemovePlugin to succeed for a plugin with no running instance, got %v", err)
+	}
+	if _, ok := reg.Config("p1"); ok {
+		t.Fatal("expected config to be gone after RemovePlugin")
+	}
+}
+
+func TestRegistryUpdatePluginWorksAfterInitFailure(t *testing.T) {
+	host := newFakeHost()
+	reg := NewRegistry(host, NewMappingStore())
+	var attempt int
+	reg.RegisterFactory("flaky", func(id string) Plugin {
+		attempt++
+		p := newFakePlugin(id)
+		if attempt == 1 {
+			p.initErr = errors.New("boom")
+		}
+		return p
+	})
+	if err := reg.AddPlugin(context.Background(), PluginConfig{ID: "p1", Type: "flaky"}); err == nil {
+		t.Fatal("expected AddPlugin's initial attempt to fail")
+	}
+
+	// UpdatePlugin (e.g. the user fixing a bad token via the UI) must work
+	// even though there's no running instance yet — only a retained config.
+	if err := reg.UpdatePlugin(context.Background(), PluginConfig{ID: "p1", Type: "flaky"}); err != nil {
+		t.Fatalf("expected UpdatePlugin to succeed after a failed Init, got %v", err)
+	}
+	if _, ok := reg.Plugin("p1"); !ok {
+		t.Fatal("expected a running instance after UpdatePlugin's retry succeeds")
+	}
+}
+
+// ── Registry: supervisor auto-retry ─────────────────────────────────────────
+
+func TestRegistrySupervisorRetriesAndRecoversFailedInit(t *testing.T) {
+	// t.Cleanup runs LIFO: register the package-var restore first so it
+	// executes last, after the "stop the supervisor" cleanup below has
+	// already cancelled its context — otherwise the still-running
+	// supervisor goroutine races with restoring these vars.
+	prevInterval, prevMax := supervisorInterval, supervisorBackoffMax
+	supervisorInterval = 5 * time.Millisecond
+	supervisorBackoffMax = 20 * time.Millisecond
+	t.Cleanup(func() { supervisorInterval, supervisorBackoffMax = prevInterval, prevMax })
+
+	host := newFakeHost()
+	reg := NewRegistry(host, NewMappingStore())
+	var attempt int32
+	reg.RegisterFactory("flaky", func(id string) Plugin {
+		n := atomic.AddInt32(&attempt, 1)
+		p := newFakePlugin(id)
+		if n == 1 {
+			p.initErr = errors.New("boom")
+		}
+		return p
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	// Start() with a config that fails its first attempt — the supervisor
+	// (started by Start) must pick it up and retry on its own, with no
+	// manual RestartPlugin/UpdatePlugin call.
+	if err := reg.Start(ctx, []PluginConfig{{ID: "p1", Type: "flaky"}}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if _, ok := reg.Plugin("p1"); ok {
+		t.Fatal("expected the plugin to not be running immediately after the failed first attempt")
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if _, ok := reg.Plugin("p1"); ok {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for the supervisor to auto-retry and recover the plugin")
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+}
+
+func TestRegistrySupervisorSkipsDisabledPlugins(t *testing.T) {
+	// See the LIFO-ordering note in TestRegistrySupervisorRetriesAndRecoversFailedInit.
+	prevInterval := supervisorInterval
+	supervisorInterval = 5 * time.Millisecond
+	t.Cleanup(func() { supervisorInterval = prevInterval })
+
+	host := newFakeHost()
+	reg := NewRegistry(host, NewMappingStore())
+	var calls int32
+	reg.RegisterFactory("counting", func(id string) Plugin {
+		atomic.AddInt32(&calls, 1)
+		return newFakePlugin(id)
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	if err := reg.Start(ctx, []PluginConfig{{ID: "p1", Type: "counting", Disabled: true}}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	time.Sleep(30 * time.Millisecond) // give the supervisor a few ticks
+	if got := atomic.LoadInt32(&calls); got != 0 {
+		t.Fatalf("expected the supervisor to never instantiate a disabled plugin, got %d factory calls", got)
 	}
 }

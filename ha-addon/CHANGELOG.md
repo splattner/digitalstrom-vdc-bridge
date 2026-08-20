@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.1.14](https://github.com/splattner/digitalstrom-vdc-bridge/compare/v0.1.13...v0.1.14) (2026-08-20)
+
+
+### Features
+
+* add optional HTTP Basic Auth for standalone deployments ([#188](https://github.com/splattner/digitalstrom-vdc-bridge/issues/188)) ([feb17d0](https://github.com/splattner/digitalstrom-vdc-bridge/commit/feb17d0333d15e82ea16c344502ab7979aaf7266))
+* **discovery:** push discoveryChanged events instead of polling ([#192](https://github.com/splattner/digitalstrom-vdc-bridge/issues/192)) ([97f1811](https://github.com/splattner/digitalstrom-vdc-bridge/commit/97f1811dacd033168a702d87b7c91ce211abdc71))
+* recall native WLED presets for digitalSTROM scene calls ([#190](https://github.com/splattner/digitalstrom-vdc-bridge/issues/190)) ([975ee4d](https://github.com/splattner/digitalstrom-vdc-bridge/commit/975ee4dad510b08a2fbf5c339936d7081df42e68))
+* **shelly:** add Shelly Gen2+ plugin (relay and dimmer control) ([#193](https://github.com/splattner/digitalstrom-vdc-bridge/issues/193)) ([5d25d1f](https://github.com/splattner/digitalstrom-vdc-bridge/commit/5d25d1f9c46c6231b87ba6b025b76722ca0295a9))
+* **shelly:** bridge power metering, binary inputs, and buttons ([#195](https://github.com/splattner/digitalstrom-vdc-bridge/issues/195)) ([9e3f385](https://github.com/splattner/digitalstrom-vdc-bridge/commit/9e3f385e35b645491ff1de018c5992c610f2cb88))
+
+
+### Bug Fixes
+
+* **deps:** update module github.com/coder/websocket to v1.8.15 ([#108](https://github.com/splattner/digitalstrom-vdc-bridge/issues/108)) ([a10fdaa](https://github.com/splattner/digitalstrom-vdc-bridge/commit/a10fdaa7a25d7ca5b0a412cdf63ea2350c496fc6))
+* **deps:** update module github.com/eclipse/paho.mqtt.golang to v1.5.1 ([#86](https://github.com/splattner/digitalstrom-vdc-bridge/issues/86)) ([646e53f](https://github.com/splattner/digitalstrom-vdc-bridge/commit/646e53f26a66e14b5dcc17543563da3a51d6f197))
+* **deps:** update module github.com/go-chi/chi/v5 to v5.3.1 ([#130](https://github.com/splattner/digitalstrom-vdc-bridge/issues/130)) ([b84ce5d](https://github.com/splattner/digitalstrom-vdc-bridge/commit/b84ce5dcc1083ac3c2000b47fa41d0ac9b4ed5a3))
+* **deps:** update module github.com/go-chi/chi/v5 to v5.3.2 ([#194](https://github.com/splattner/digitalstrom-vdc-bridge/issues/194)) ([73d7b8c](https://github.com/splattner/digitalstrom-vdc-bridge/commit/73d7b8cda63c1b807786af0f8c50a9c9b86f7062))
+* **deps:** update module google.golang.org/protobuf to v1.36.12 ([#172](https://github.com/splattner/digitalstrom-vdc-bridge/issues/172)) ([707bb0f](https://github.com/splattner/digitalstrom-vdc-bridge/commit/707bb0f4aa2e37c4a4c7752767be19f62a295e5d))
+* implement smooth ramp for dimChannel notifications ([#184](https://github.com/splattner/digitalstrom-vdc-bridge/issues/184)) ([677aa6c](https://github.com/splattner/digitalstrom-vdc-bridge/commit/677aa6cc1317fa70d8dea072ec66f2755248ca0b))
+* remove stale --listen flag from Docker CMD ([#181](https://github.com/splattner/digitalstrom-vdc-bridge/issues/181)) ([a201a0b](https://github.com/splattner/digitalstrom-vdc-bridge/commit/a201a0b705e1007bd875318a3f5b54378bd1f28c))
+* report switch-kind bridge devices as non-dimmable to the dSS ([#189](https://github.com/splattner/digitalstrom-vdc-bridge/issues/189)) ([f806780](https://github.com/splattner/digitalstrom-vdc-bridge/commit/f806780d51356c3f9b03e141ad9271ccc0c6beab))
+* stop leaking plugin goroutines and add auto-retry supervision ([#191](https://github.com/splattner/digitalstrom-vdc-bridge/issues/191)) ([16173ae](https://github.com/splattner/digitalstrom-vdc-bridge/commit/16173aef12b1013640f5e41e4d0765ec59de4592))
+
 ## [0.1.13](https://github.com/splattner/digitalstrom-vdc-bridge/compare/v0.1.12...v0.1.13) (2026-05-24)
 
 

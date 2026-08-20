@@ -9,10 +9,14 @@ import (
 )
 
 type ExternalDeviceState struct {
-	Key                    string
-	UniqueID               string
-	Name                   string
-	Output                 string
+	Key      string
+	UniqueID string
+	Name     string
+	Output   string
+	// Dimmable distinguishes a real dimmer from a plain relay/switch light
+	// output (Output == "light"). True by default — only "light"-output
+	// devices whose plugin explicitly reported non-dimmable set this false.
+	Dimmable               bool
 	Channels               map[int]float64
 	ChannelUpdatedAt       map[int]time.Time
 	Buttons                map[int]float64
@@ -81,6 +85,11 @@ func (s *StateStore) HandleEvent(e runtime.Event) {
 		d.Output = strings.TrimSpace(e.Output)
 		if d.Output == "" {
 			d.Output = "light"
+		}
+		if e.Dimmable != nil {
+			d.Dimmable = *e.Dimmable
+		} else {
+			d.Dimmable = true
 		}
 		if d.Buttons == nil {
 			d.Buttons = make(map[int]float64)

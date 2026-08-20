@@ -110,11 +110,16 @@ func (h *hostImpl) DeriveDSUID(pluginID, remoteEntityID string) string {
 }
 
 func (h *hostImpl) AnnounceDevice(_ context.Context, m Mapping) error {
+	// "light" is the one non-dimmable bridge kind (a plain relay/switch);
+	// everything else that maps to a light-ish output ("dimmer", "colorlight",
+	// "movinglight") is dimmable.
+	dimmable := m.Kind != "light"
 	h.state.HandleEvent(runtime.Event{
 		Type:     runtime.EventInit,
 		UniqueID: m.DSUID,
 		Name:     m.Name,
 		Output:   kindToOutput(m.Kind),
+		Dimmable: &dimmable,
 	})
 	return nil
 }

@@ -117,12 +117,27 @@ func newOutputTypeResult(kind, model string) outputTypeResult {
 	}
 }
 
-func buildLightTypeProps(d ExternalDeviceState) outputTypeResult {
-	tp := newOutputTypeResult("dimmer", "external-light")
-	tp.outputDescription = map[string]any{
-		"function": 1, "outputUsage": 1, "variableRamp": true, "maxPower": 0,
+// buildLightTypeProps builds properties for a light-ish output. dimmable
+// distinguishes a real dimmer from a plain relay/switch light: per the dS
+// spec (vDC API properties: outputDescription.function 0=on/off-only vs
+// 1=dimmer; outputSettings.mode 1=binary vs 2=gradual; ds-light.pdf §2.3
+// "Smart Dimming", Rule 6), a switched output still uses the same 0-100%
+// channel and internal ramping — it just thresholds at onThreshold instead
+// of driving the output continuously.
+func buildLightTypeProps(d ExternalDeviceState, dimmable bool) outputTypeResult {
+	kind := "light"
+	function := 0 // on/off only
+	mode := 1     // binary
+	if dimmable {
+		kind = "dimmer"
+		function = 1 // dimmer
+		mode = 2     // gradual
 	}
-	tp.outputSettings = buildLightOutputSettings(1)
+	tp := newOutputTypeResult(kind, "external-light")
+	tp.outputDescription = map[string]any{
+		"function": function, "outputUsage": 1, "variableRamp": dimmable, "maxPower": 0,
+	}
+	tp.outputSettings = buildLightOutputSettings(1, mode)
 	tp.outputState = buildOutputState()
 	tp.channelStates["0"] = map[string]any{"value": channelValue(d, 0), "age": channelAge(d, 0)}
 	tp.channelDescriptions["0"] = map[string]any{
@@ -137,7 +152,7 @@ func buildColorlightTypeProps(d ExternalDeviceState) outputTypeResult {
 	tp.outputDescription = map[string]any{
 		"function": 4, "outputUsage": 1, "variableRamp": true, "maxPower": 0,
 	}
-	tp.outputSettings = buildLightOutputSettings(1)
+	tp.outputSettings = buildLightOutputSettings(1, 2) // always gradual
 	tp.outputState = buildOutputState()
 	now := time.Now()
 	for idx, chDesc := range colorlightChannelDescriptions() {
@@ -497,7 +512,7 @@ func buildDeviceProperties(dsuid string, d ExternalDeviceState, scenes *SceneSto
 	var tp outputTypeResult
 	switch {
 	case strings.EqualFold(output, "light"):
-		tp = buildLightTypeProps(d)
+		tp = buildLightTypeProps(d, d.Dimmable)
 	case strings.EqualFold(output, "colorlight"):
 		tp = buildColorlightTypeProps(d)
 	case strings.EqualFold(output, "movinglight"):
@@ -629,12 +644,15 @@ func buildModelFeatures(kind string, hasChannels, hasButtons, hasBinaryInputs, h
 		mf["outvalue8"] = !isShadow
 		mf["blink"] = true
 	}
-	if dimmable {
-		// from lightbehaviour.cpp
+	if dimmable || kind == "light" {
+		// from lightbehaviour.cpp. kind=="light" is a plain relay/switch
+		// output (see buildLightTypeProps) — it still has an output mode
+		// setting, just restricted to switch (outmodeswitch=true) rather
+		// than a continuous dimming curve (transt=false).
 		mf["outmode"] = true
-		mf["outmodeswitch"] = false
+		mf["outmodeswitch"] = !dimmable
 		mf["outmodegeneric"] = false
-		mf["transt"] = true
+		mf["transt"] = dimmable
 	}
 	if kind == "colorlight" {
 		// from colorlightbehaviour.cpp — required for the multi-channel color UI
@@ -659,10 +677,11 @@ func buildOutputState() map[string]any {
 }
 
 // buildLightOutputSettings returns outputSettings for a light/dimmer device.
-func buildLightOutputSettings(group int) map[string]any {
+// mode is the dS outputSettings.mode enum (1=binary, 2=gradual).
+func buildLightOutputSettings(group, mode int) map[string]any {
 	return map[string]any{
 		"groups":          map[string]any{strconv.Itoa(group): true},
-		"mode":            2, // gradual
+		"mode":            mode,
 		"pushChanges":     false,
 		"onThreshold":     50.0,
 		"minBrightness":   0.0,
@@ -1003,7 +1022,7 @@ func applyOutputSettingsOverlay(m map[string]any, ov OutputSettingsEntry) {
 // 1=yellow/light, 2=grey/shadow, 3=blue/climate, 8=black/joker.
 func primaryGroupForKind(kind string) int {
 	switch kind {
-	case "dimmer", "colorlight", "movinglight":
+	case "light", "dimmer", "colorlight", "movinglight":
 		return 1 // class_yellow_light
 	case "button":
 		// Buttons default to the yellow/light group so they trigger room light

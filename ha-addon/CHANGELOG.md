@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.16](https://github.com/splattner/digitalstrom-vdc-bridge/compare/v0.1.15...v0.1.16) (2026-08-24)
+
+
+### Bug Fixes
+
+* start bridge plugins before accepting vDC API connections ([#205](https://github.com/splattner/digitalstrom-vdc-bridge/issues/205)) ([ae2f1dc](https://github.com/splattner/digitalstrom-vdc-bridge/commit/ae2f1dc134d0871d3b1eb8d47f0feec7bf436b55))
+
 ## [0.1.15](https://github.com/splattner/digitalstrom-vdc-bridge/compare/v0.1.14...v0.1.15) (2026-08-20)
 
 

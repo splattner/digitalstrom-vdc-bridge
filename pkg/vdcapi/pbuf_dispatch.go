@@ -209,6 +209,7 @@ func (s *PbufServer) processPbufMessageForConn(payload []byte, sess *session, co
 		if target == "" {
 			return [][]byte{buildPbufGenericResponse(msgID, hasID, pbufResultMessageUnknown, "missing dSUID")}, false
 		}
+		logging.Info("vdsm_remove_request", logging.Fields{"dsuid": target})
 		if err := s.methodService().removeDeviceByDSUID(target); err != nil {
 			return [][]byte{buildPbufGenericResponse(msgID, hasID, pbufResultNotFound, err.Error())}, false
 		}

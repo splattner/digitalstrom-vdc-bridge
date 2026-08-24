@@ -332,6 +332,20 @@ func (s *Service) Run(ctx context.Context) error {
 	errCh := make(chan error, 2)
 	var wg sync.WaitGroup
 
+	// Start bridge plugins and restore persisted mappings *before* accepting
+	// vDC API connections. Otherwise a vDSM that reconnects quickly after a
+	// restart can send its "Hello" while the state store is still empty; the
+	// stale-device reconciliation in that handshake (see
+	// ConfigStore.StaleAnnouncedDSUIDs) would then read an incomplete
+	// snapshot and tell the dSS to vanish every previously-bridged device
+	// that hasn't been re-announced yet, even though its mapping is still
+	// live — the dSS can then explicitly ask us to forget it (a "remove"
+	// call), leaving an orphaned mapping that looks bridged in the UI but
+	// never comes back until it's manually un-bridged and re-bridged.
+	if err := s.bridges.Start(runCtx, s.cfg.PluginConfigs); err != nil {
+		logging.Warn("bridge_start_error", logging.Fields{"error": err.Error()})
+	}
+
 	if s.cfg.EnableVdcAPI && s.pbufServer != nil {
 		wg.Add(1)
 		go func() {
@@ -340,11 +354,6 @@ func (s *Service) Run(ctx context.Context) error {
 				errCh <- err
 			}
 		}()
-	}
-
-	// Start bridge plugins and restore persisted mappings.
-	if err := s.bridges.Start(runCtx, s.cfg.PluginConfigs); err != nil {
-		logging.Warn("bridge_start_error", logging.Fields{"error": err.Error()})
 	}
 
 	if s.httpServer != nil {

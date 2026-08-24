@@ -3,6 +3,8 @@ package vdcapi
 import (
 	"fmt"
 	"strings"
+
+	"github.com/splattner/vdcgo/pkg/logging"
 )
 
 // processRequest dispatches an inbound vDC API request and returns a response
@@ -285,6 +287,7 @@ func (s *Server) handleJSONNotification(name string, params map[string]any, sess
 
 	case strings.EqualFold(name, "remove"):
 		removeTarget := strings.TrimSpace(stringFromAny(params["dSUID"]))
+		logging.Info("vdsm_remove_request", logging.Fields{"dsuid": removeTarget})
 		if err := s.methodService().removeDeviceByDSUID(removeTarget); err != nil {
 			return &response{Error: 404, ErrorMsg: err.Error()}
 		}

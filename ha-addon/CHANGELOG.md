@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.17](https://github.com/splattner/digitalstrom-vdc-bridge/compare/v0.1.16...v0.1.17) (2026-08-29)
+
+
+### Bug Fixes
+
+* announce bridge mappings whose plugin is not running ([#218](https://github.com/splattner/digitalstrom-vdc-bridge/issues/218)) ([71f2238](https://github.com/splattner/digitalstrom-vdc-bridge/commit/71f22383da973c18be79f54c79355734c9c9dec1))
+
 ## [0.1.16](https://github.com/splattner/digitalstrom-vdc-bridge/compare/v0.1.15...v0.1.16) (2026-08-24)
 
 

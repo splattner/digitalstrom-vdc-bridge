@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -243,23 +244,27 @@ func (r *Registry) Start(ctx context.Context, configs []PluginConfig) error {
 	// and subscribe the owning plugin so it starts forwarding updates.
 	for _, m := range r.mappings.List() {
 		r.mu.RLock()
-		p, ok := r.instances[m.PluginID]
-		cfg, hasCfg := r.configs[m.PluginID]
+		p, running := r.instances[m.PluginID]
+		_, hasCfg := r.configs[m.PluginID]
 		r.mu.RUnlock()
-		if !ok {
-			if hasCfg && cfg.Disabled {
-				// Mapping belongs to a disabled plugin: still announce it so
-				// the device exists, but skip subscribe (no live updates).
-				if err := r.host.AnnounceDevice(ctx, m); err != nil {
-					logging.Warn("bridge_restore_announce_error", logging.Fields{"dsuid": m.DSUID, "error": err.Error()})
-				}
-				continue
-			}
+		if !running && !hasCfg {
+			// No plugin config owns this mapping at all — nothing can ever
+			// drive it, so announcing a permanently dead device would be
+			// worse than leaving it out.
 			logging.Warn("bridge_orphan_mapping", logging.Fields{"plugin_id": m.PluginID, "dsuid": m.DSUID})
 			continue
 		}
-		if err := r.host.AnnounceDevice(ctx, m); err != nil {
-			logging.Warn("bridge_restore_announce_error", logging.Fields{"dsuid": m.DSUID, "error": err.Error()})
+		// Announce regardless of whether the plugin is running. A plugin that
+		// is disabled, or whose Init failed and is waiting on a supervisor
+		// retry, must still have its device exist (as inactive) — otherwise
+		// the device silently does not exist at all, the dSS is told to
+		// vanish it on the next vDSM handshake, and nothing ever announces it
+		// again even after the plugin recovers, while the mapping keeps
+		// reporting it as bridged.
+		r.ensureAnnounced(ctx, m)
+		if !running {
+			r.markInactive(ctx, m)
+			continue
 		}
 		if err := p.Subscribe(ctx, m); err != nil {
 			logging.Warn("bridge_restore_subscribe_error", logging.Fields{"dsuid": m.DSUID, "error": err.Error()})
@@ -267,6 +272,46 @@ func (r *Registry) Start(ctx context.Context, configs []PluginConfig) error {
 		logging.Info("bridge_mapping_restored", logging.Fields{"plugin_id": m.PluginID, "dsuid": m.DSUID, "name": m.Name})
 	}
 	return nil
+}
+
+// ensureAnnounced announces m's device unless it is already present in the
+// vDC state store. Announcing is not free at the protocol level — the pbuf
+// server turns it into a vanish/announce pair so the dSS re-queries every
+// property — so this deliberately does nothing for a device that already
+// exists.
+func (r *Registry) ensureAnnounced(ctx context.Context, m Mapping) {
+	if r.host.HasDevice(m.DSUID) {
+		return
+	}
+	if err := r.host.AnnounceDevice(ctx, m); err != nil {
+		logging.Warn("bridge_restore_announce_error", logging.Fields{"dsuid": m.DSUID, "error": err.Error()})
+		return
+	}
+	logging.Info("bridge_mapping_announced", logging.Fields{"plugin_id": m.PluginID, "dsuid": m.DSUID, "name": m.Name})
+}
+
+// markInactive flags a just-announced device as offline, for a mapping whose
+// plugin is not currently running. The device exists (so it survives the vDSM
+// handshake's stale-device reconciliation and can recover) but is honestly
+// reported as unreachable rather than silently stuck at its last value.
+func (r *Registry) markInactive(ctx context.Context, m Mapping) {
+	if err := r.host.UpdateActive(ctx, m.DSUID, false); err != nil {
+		logging.Warn("bridge_restore_inactive_error", logging.Fields{"dsuid": m.DSUID, "error": err.Error()})
+	}
+}
+
+// restoreMappings re-establishes every mapping owned by pluginID against a
+// freshly started instance: the device is announced if it is missing from the
+// state store, then subscribed. Subscribe alone is not enough — every state
+// update for a device the store does not know about is silently dropped, so a
+// mapping that was never announced would stay invisible forever.
+func (r *Registry) restoreMappings(ctx context.Context, pluginID string, p Plugin) {
+	for _, m := range r.mappings.ListForPlugin(pluginID) {
+		r.ensureAnnounced(ctx, m)
+		if err := p.Subscribe(ctx, m); err != nil {
+			logging.Warn("bridge_resubscribe_error", logging.Fields{"dsuid": m.DSUID, "error": err.Error()})
+		}
+	}
 }
 
 // startPlugin instantiates and initialises a single plugin.
@@ -386,11 +431,7 @@ func (r *Registry) superviseOnce(ctx context.Context) {
 		if fresh == nil {
 			continue
 		}
-		for _, m := range r.mappings.ListForPlugin(pc.ID) {
-			if err := fresh.Subscribe(ctx, m); err != nil {
-				logging.Warn("bridge_resubscribe_error", logging.Fields{"dsuid": m.DSUID, "error": err.Error()})
-			}
-		}
+		r.restoreMappings(ctx, pc.ID, fresh)
 	}
 }
 
@@ -484,11 +525,7 @@ func (r *Registry) UpdatePlugin(ctx context.Context, pc PluginConfig) error {
 	fresh := r.instances[pc.ID]
 	r.mu.RUnlock()
 	if fresh != nil {
-		for _, m := range r.mappings.ListForPlugin(pc.ID) {
-			if err := fresh.Subscribe(runCtx, m); err != nil {
-				logging.Warn("bridge_resubscribe_error", logging.Fields{"dsuid": m.DSUID, "error": err.Error()})
-			}
-		}
+		r.restoreMappings(runCtx, pc.ID, fresh)
 	}
 	r.persistConfigs()
 	r.emit("pluginUpdated", map[string]any{"id": pc.ID, "type": pc.Type})
@@ -526,11 +563,7 @@ func (r *Registry) RestartPlugin(ctx context.Context, id string) error {
 	fresh := r.instances[id]
 	r.mu.RUnlock()
 	if fresh != nil {
-		for _, m := range r.mappings.ListForPlugin(id) {
-			if err := fresh.Subscribe(runCtx, m); err != nil {
-				logging.Warn("bridge_resubscribe_error", logging.Fields{"dsuid": m.DSUID, "error": err.Error()})
-			}
-		}
+		r.restoreMappings(runCtx, id, fresh)
 	}
 	r.emit("pluginUpdated", map[string]any{"id": id, "type": pc.Type})
 	r.sinkEmit(id, LevelInfo, CodePluginRestarted, "plugin restarted", map[string]any{"type": pc.Type})
@@ -561,11 +594,7 @@ func (r *Registry) SetEnabled(ctx context.Context, id string, enabled bool) erro
 		fresh := r.instances[id]
 		r.mu.RUnlock()
 		if fresh != nil {
-			for _, m := range r.mappings.ListForPlugin(id) {
-				if err := fresh.Subscribe(runCtx, m); err != nil {
-					logging.Warn("bridge_resubscribe_error", logging.Fields{"dsuid": m.DSUID, "error": err.Error()})
-				}
-			}
+			r.restoreMappings(runCtx, id, fresh)
 		}
 		r.emit("pluginUpdated", map[string]any{"id": id, "type": pc.Type})
 		r.sinkEmit(id, LevelInfo, CodePluginStarted, "plugin enabled", map[string]any{"type": pc.Type})
@@ -607,6 +636,11 @@ func (r *Registry) IsEnabled(id string) bool {
 }
 
 // persistConfigs invokes the registered Persister with the current config list.
+// The list is sorted by id: r.configs is a map, and an unsorted iteration
+// would rewrite plugins.json in a different order on every save. Since Start
+// instantiates plugins in file order, that turned a plugin's startup
+// dependency (a Tasmota/Z2M plugin needs its MQTT broker plugin registered
+// first) into a coin flip on each restart.
 func (r *Registry) persistConfigs() {
 	r.mu.RLock()
 	p := r.persist
@@ -615,6 +649,7 @@ func (r *Registry) persistConfigs() {
 		list = append(list, c)
 	}
 	r.mu.RUnlock()
+	sort.Slice(list, func(i, j int) bool { return list[i].ID < list[j].ID })
 	if p == nil {
 		return
 	}

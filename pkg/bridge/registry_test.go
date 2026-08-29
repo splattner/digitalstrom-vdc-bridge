@@ -55,6 +55,13 @@ func (h *fakeHost) RemoveDevice(_ context.Context, dsuid string) error {
 	return nil
 }
 
+func (h *fakeHost) HasDevice(dsuid string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	_, ok := h.announced[dsuid]
+	return ok
+}
+
 func (h *fakeHost) isAnnounced(dsuid string) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -1024,5 +1031,80 @@ func TestRegistryNotifyDiscoveryChangedReachesNotifier(t *testing.T) {
 	}
 	if gotData["pluginId"] != "p1" {
 		t.Fatalf("expected pluginId p1 in event data, got %+v", gotData)
+	}
+}
+
+// TestRegistryStartAnnouncesMappingsOfPluginThatFailedInit covers the bug
+// behind "device is gone from the Devices page but still shows as bridged on
+// Discovered": when a plugin's Init fails at startup (e.g. a Tasmota plugin
+// whose MQTT broker plugin has not been registered yet), its persisted
+// mappings must still be announced into the vDC state store. Otherwise the
+// device silently does not exist at all — the dSS is told to vanish it during
+// the next vDSM handshake, while the mapping stays on disk and keeps showing
+// as bridged, and no later recovery path ever announces it again.
+func TestRegistryStartAnnouncesMappingsOfPluginThatFailedInit(t *testing.T) {
+	host := newFakeHost()
+	reg := NewRegistry(host, NewMappingStore())
+	reg.RegisterFactory("brokenfake", func(id string) Plugin {
+		p := newFakePlugin(id)
+		p.initErr = errors.New("broker \"mqtt1\" not registered")
+		return p
+	})
+
+	m := Mapping{PluginID: "p1", RemoteEntityID: "relay1", DSUID: "DSUID-p1-relay1", Kind: "light", Name: "Relay"}
+	if _, err := reg.Mappings().Add(m); err != nil {
+		t.Fatalf("seed mapping: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	if err := reg.Start(ctx, []PluginConfig{{ID: "p1", Type: "brokenfake"}}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	if _, ok := reg.Plugin("p1"); ok {
+		t.Fatal("expected the plugin to have failed Init")
+	}
+	if !host.isAnnounced(m.DSUID) {
+		t.Fatal("mapping of a plugin whose Init failed was not announced — the device does not exist in the vDC state store, yet the mapping still reports it as bridged")
+	}
+}
+
+// TestRegistrySupervisorAnnouncesRecoveredMappings covers the second half of
+// the same failure: once the supervisor gets the plugin running, a mapping
+// that is not currently in the state store must be announced, not just
+// subscribed. Subscribe alone only wires up live updates, and every state
+// update for an unknown device is silently dropped.
+func TestRegistrySupervisorAnnouncesRecoveredMappings(t *testing.T) {
+	host := newFakeHost()
+	reg := NewRegistry(host, NewMappingStore())
+	reg.RegisterFactory("fake", func(id string) Plugin { return newFakePlugin(id) })
+
+	m := Mapping{PluginID: "p1", RemoteEntityID: "relay1", DSUID: "DSUID-p1-relay1", Kind: "light", Name: "Relay"}
+	if _, err := reg.Mappings().Add(m); err != nil {
+		t.Fatalf("seed mapping: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	if err := reg.Start(ctx, []PluginConfig{{ID: "p1", Type: "fake"}}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	// Simulate the dSS asking us to forget the device (a vDSM "remove"),
+	// which drops it from the state store but leaves the mapping in place.
+	if err := host.RemoveDevice(ctx, m.DSUID); err != nil {
+		t.Fatalf("RemoveDevice: %v", err)
+	}
+	if host.isAnnounced(m.DSUID) {
+		t.Fatal("precondition: device should be gone from the state store")
+	}
+
+	// Restarting the plugin must bring the device back.
+	if err := reg.RestartPlugin(ctx, "p1"); err != nil {
+		t.Fatalf("RestartPlugin: %v", err)
+	}
+	if !host.isAnnounced(m.DSUID) {
+		t.Fatal("restarting the plugin did not re-announce a mapping missing from the state store")
 	}
 }

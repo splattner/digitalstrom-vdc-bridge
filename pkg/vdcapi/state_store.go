@@ -72,6 +72,21 @@ func (s *StateStore) Snapshot() ExternalSnapshot {
 	return out
 }
 
+// Has reports whether a device with the given uniqueID is currently present.
+// Used by the bridge Registry to tell "this mapping's device already exists"
+// apart from "this mapping was never announced", without re-announcing (and
+// thereby churning a vanish/announce pair at the dSS) on every plugin restart.
+func (s *StateStore) Has(uniqueID string) bool {
+	uniqueID = strings.TrimSpace(uniqueID)
+	if uniqueID == "" {
+		return false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	_, ok := s.devices["uid:"+uniqueID]
+	return ok
+}
+
 func (s *StateStore) HandleEvent(e runtime.Event) {
 	var update *StateUpdate
 

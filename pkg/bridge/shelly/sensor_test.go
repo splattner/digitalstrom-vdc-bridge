@@ -143,6 +143,7 @@ func (h *fakeHost) UpdateActive(_ context.Context, dsuid string, active bool) er
 	return nil
 }
 
+func (h *fakeHost) HasDevice(string) bool                               { return true }
 func (h *fakeHost) MQTT() *mqtt.Manager                                 { return nil }
 func (h *fakeHost) Log(bridge.LogLevel, string, string, map[string]any) {}
 func (h *fakeHost) NotifyDiscoveryChanged()                             {}

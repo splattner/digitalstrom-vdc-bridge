@@ -18,6 +18,13 @@ type Host interface {
 	AnnounceDevice(ctx context.Context, m Mapping) error
 	// RemoveDevice removes a bridge device from the vDC state store.
 	RemoveDevice(ctx context.Context, dsuid string) error
+	// HasDevice reports whether a device is currently present in the vDC
+	// state store. A bridge mapping can outlive its device — the dSS can ask
+	// the vDC to forget a device (a vDSM "remove"), and a plugin whose Init
+	// failed never gets its mappings announced in the first place — so this
+	// distinguishes "already announced" from "needs announcing" without
+	// re-announcing unconditionally.
+	HasDevice(dsuid string) bool
 	// UpdateChannel pushes a channel value update for a device.
 	UpdateChannel(ctx context.Context, dsuid string, channelIndex int, value float64) error
 	// UpdateButton pushes a raw button input state change (1=pressed, 0=released).
@@ -143,6 +150,10 @@ func (h *hostImpl) RemoveDevice(_ context.Context, dsuid string) error {
 		UniqueID: dsuid,
 	})
 	return nil
+}
+
+func (h *hostImpl) HasDevice(dsuid string) bool {
+	return h.state.Has(dsuid)
 }
 
 func (h *hostImpl) UpdateChannel(_ context.Context, dsuid string, channelIndex int, value float64) error {

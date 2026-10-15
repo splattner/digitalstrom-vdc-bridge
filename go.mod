@@ -5,7 +5,7 @@ go 1.24.0
 require (
 	github.com/coder/websocket v1.8.15
 	github.com/eclipse/paho.mqtt.golang v1.5.1
-	github.com/go-chi/chi/v5 v5.4.0
+	github.com/go-chi/chi/v5 v5.5.0
 	github.com/godbus/dbus/v5 v5.2.4
 	github.com/grandcat/zeroconf v1.0.0
 	google.golang.org/protobuf v1.36.12
